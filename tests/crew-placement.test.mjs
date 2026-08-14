@@ -14,6 +14,8 @@ test("crew placement data is persistent, crew-specific, audited, and protected b
   assert.match(migration, /unique index if not exists crew_placements_position_crew_idx[\s\S]*position_id, shift_color, shift_period/i, "Each crew needs its own copy of a shared template position");
   assert.match(migration, /create index if not exists crew_positions_system_order_idx[\s\S]*system_id, sort_order, name/i, "Position slots should retain their configured order");
   assert.doesNotMatch(migration, /unique index if not exists crew_positions_system_name_idx/i, "Templates must allow repeated position labels such as two Pack end slots");
+  assert.match(migration, /drop index if exists public\.crew_positions_system_name_idx/i, "The final migration must remove the draft template-name restriction");
+  assert.match(migration, /add column if not exists shift_color[\s\S]*add column if not exists shift_period[\s\S]*drop constraint if exists crew_placements_position_id_key/i, "The final migration must safely upgrade the earlier crew-placement draft");
   assert.match(migration, /p\.department_id = e\.department_id[\s\S]*p\.shift_color = e\.shift_color[\s\S]*p\.shift_period = e\.shift_period/i, "Supervisors must be restricted to their exact assigned crew");
   assert.match(migration, /create trigger crew_placement_validation_trigger/i, "Database validation must protect placement integrity");
   assert.match(migration, /create trigger crew_placement_history_trigger/i, "Every placement move must be timestamped automatically");
