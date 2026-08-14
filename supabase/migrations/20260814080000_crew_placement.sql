@@ -24,8 +24,10 @@ create table if not exists public.crew_positions (
   updated_at timestamptz not null default now()
 );
 
-create unique index if not exists crew_positions_system_name_idx
-  on public.crew_positions (system_id, lower(name));
+-- Position labels are intentionally not unique: a line may need repeated slots
+-- such as two separate "Pack end" assignments.
+create index if not exists crew_positions_system_order_idx
+  on public.crew_positions (system_id, sort_order, name);
 
 create table if not exists public.crew_placements (
   employee_id uuid primary key references public.employees(id) on delete cascade,
