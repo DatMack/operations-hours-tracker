@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
-const [client, html, baseMigration, migration, privateHelpersMigration, companyMigration, assignmentMigration, deployWorkflow] = await Promise.all([
+const [client, html, baseMigration, migration, privateHelpersMigration, companyMigration, assignmentMigration, colorMigration, deployWorkflow] = await Promise.all([
   read("src/lib/supabase.ts"),
   read("index.html"),
   read("supabase/migrations/20260814000000_operations_hours_tracker.sql"),
@@ -10,6 +10,7 @@ const [client, html, baseMigration, migration, privateHelpersMigration, companyM
   read("supabase/migrations/20260814020000_private_rls_helpers.sql"),
   read("supabase/migrations/20260814030000_company_departments.sql"),
   read("supabase/migrations/20260814040000_supervisor_assignments.sql"),
+  read("supabase/migrations/20260814050000_supervisor_shift_color.sql"),
   read(".github/workflows/deploy-pages.yml"),
 ]);
 
@@ -49,6 +50,9 @@ assert.match(companyMigration, /audit_departments_change/i, "Department changes 
 assert.match(assignmentMigration, /profiles_assignment_guard/i, "Supervisor assignments must be validated in PostgreSQL");
 assert.match(assignmentMigration, /department_id uuid references public\.departments/i, "Supervisor departments must use a protected foreign key");
 assert.match(assignmentMigration, /Supervisors require a department and Day or Night assignment/i, "Supervisor department and shift assignments must be required");
+assert.match(colorMigration, /profiles_shift_color_check/i, "Supervisor shift color must be constrained in PostgreSQL");
+assert.match(colorMigration, /set active = false[\s\S]*department_id is null or shift_period is null/i, "Incomplete legacy supervisor assignments must be deactivated");
+assert.match(colorMigration, /department, shift color, and Day or Night assignment/i, "Complete supervisor crew assignments must be required");
 assert.match(deployWorkflow, /contents: read/, "The deployment workflow must use read-only repository access");
 assert.match(deployWorkflow, /pages: write/, "The deployment workflow may write only to Pages");
 
