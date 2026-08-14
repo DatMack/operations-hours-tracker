@@ -13,7 +13,7 @@ export const OT_REASONS = [
 ] as const;
 
 export type Role = "admin" | "supervisor" | "viewer";
-export type Profile = { email: string; fullName: string; role: Role; active: boolean; departmentId?: string; shiftPeriod?: "Day" | "Night"; createdAt?: string };
+export type Profile = { email: string; fullName: string; role: Role; active: boolean; departmentId?: string; shiftColor?: ShiftColor; shiftPeriod?: "Day" | "Night"; createdAt?: string };
 export type Department = { id: string; name: string; defaultCostCode: string; active: boolean; createdAt?: string; updatedAt?: string };
 export type Employee = {
   id: string;
@@ -56,7 +56,7 @@ export type TrackerBundle = {
 };
 
 type DbError = { message: string } | null;
-type ProfileRow = { email: string; full_name: string; role: Role; active: boolean; department_id: string | null; shift_period: "Day" | "Night" | null; created_at: string };
+type ProfileRow = { email: string; full_name: string; role: Role; active: boolean; department_id: string | null; shift_color: ShiftColor | null; shift_period: "Day" | "Night" | null; created_at: string };
 type DepartmentRow = { id: string; name: string; default_cost_code: string; active: boolean; created_at: string; updated_at: string };
 type EmployeeRow = { id: string; name: string; shift_color: ShiftColor; shift_period: "Day" | "Night"; department_id: string; department: string; active: boolean; created_at: string };
 type OvertimeRow = {
@@ -110,7 +110,7 @@ function requireAdmin(role: Role) {
 }
 
 function profile(row: ProfileRow): Profile {
-  return { email: row.email, fullName: row.full_name, role: row.role, active: row.active, departmentId: row.department_id ?? undefined, shiftPeriod: row.shift_period ?? undefined, createdAt: row.created_at };
+  return { email: row.email, fullName: row.full_name, role: row.role, active: row.active, departmentId: row.department_id ?? undefined, shiftColor: row.shift_color ?? undefined, shiftPeriod: row.shift_period ?? undefined, createdAt: row.created_at };
 }
 
 function department(row: DepartmentRow): Department {
@@ -421,9 +421,10 @@ export async function mutateTracker(payload: Record<string, unknown>): Promise<T
     const role = payload.role;
     if (!email.includes("@") || !fullName || (role !== "admin" && role !== "supervisor" && role !== "viewer")) throw new Error("Valid name, email, and role are required.");
     const assignment = role === "supervisor" ? selectedDepartment(await departmentRows(), payload.departmentId) : null;
+    const shiftColor = role === "supervisor" ? payload.shiftColor : null;
     const shiftPeriod = role === "supervisor" ? payload.shiftPeriod : null;
-    if (role === "supervisor" && (!assignment?.active || (shiftPeriod !== "Day" && shiftPeriod !== "Night"))) throw new Error("Supervisors require an active department and Day or Night assignment.");
-    const result = await supabase.from("profiles").upsert({ email, full_name: fullName, role, active: payload.active !== false, department_id: assignment?.id ?? null, shift_period: shiftPeriod }, { onConflict: "email" });
+    if (role === "supervisor" && (!assignment?.active || !validColor(shiftColor) || (shiftPeriod !== "Day" && shiftPeriod !== "Night"))) throw new Error("Supervisors require an active department, shift color, and Day or Night assignment.");
+    const result = await supabase.from("profiles").upsert({ email, full_name: fullName, role, active: payload.active !== false, department_id: assignment?.id ?? null, shift_color: shiftColor, shift_period: shiftPeriod }, { onConflict: "email" });
     check(result.error, "save approved user access");
   } else {
     throw new Error("Unknown tracker action.");
