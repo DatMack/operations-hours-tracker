@@ -24,6 +24,13 @@ create table if not exists public.crew_positions (
   updated_at timestamptz not null default now()
 );
 
+-- Upgrade databases that briefly received the earlier crew-placement draft.
+alter table public.crew_positions add column if not exists active boolean;
+update public.crew_positions set active = true where active is null;
+alter table public.crew_positions alter column active set default true;
+alter table public.crew_positions alter column active set not null;
+drop index if exists public.crew_positions_system_name_idx;
+
 -- Position labels are intentionally not unique: a line may need repeated slots
 -- such as two separate "Pack end" assignments.
 create index if not exists crew_positions_system_order_idx
@@ -37,6 +44,24 @@ create table if not exists public.crew_placements (
   updated_by text not null,
   updated_at timestamptz not null default now()
 );
+
+alter table public.crew_placements add column if not exists shift_color text;
+alter table public.crew_placements add column if not exists shift_period text;
+update public.crew_placements placement
+set shift_color = employee.shift_color,
+    shift_period = employee.shift_period
+from public.employees employee
+where employee.id = placement.employee_id
+  and (placement.shift_color is null or placement.shift_period is null);
+alter table public.crew_placements alter column shift_color set not null;
+alter table public.crew_placements alter column shift_period set not null;
+alter table public.crew_placements drop constraint if exists crew_placements_shift_color_check;
+alter table public.crew_placements
+  add constraint crew_placements_shift_color_check check (shift_color in ('Blue', 'Yellow'));
+alter table public.crew_placements drop constraint if exists crew_placements_shift_period_check;
+alter table public.crew_placements
+  add constraint crew_placements_shift_period_check check (shift_period in ('Day', 'Night'));
+alter table public.crew_placements drop constraint if exists crew_placements_position_id_key;
 
 create unique index if not exists crew_placements_position_crew_idx
   on public.crew_placements (position_id, shift_color, shift_period);
