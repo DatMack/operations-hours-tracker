@@ -13,7 +13,28 @@ export const OT_REASONS = [
 ] as const;
 
 export type Role = "admin" | "supervisor" | "viewer";
-export type Profile = { email: string; fullName: string; role: Role; active: boolean; departmentId?: string; shiftColor?: ShiftColor; shiftPeriod?: "Day" | "Night"; createdAt?: string };
+export const DASHBOARD_WIDGET_IDS = [
+  "shift_today",
+  "kpi_ot",
+  "kpi_pto",
+  "kpi_employees",
+  "kpi_ot_people",
+  "ot_trend",
+  "department_ot",
+  "shift_ot",
+  "reason_ot",
+  "cost_code_ot",
+  "pto_type",
+  "staffing_department",
+  "staffing_crew",
+  "schedule",
+  "selected_ot",
+  "selected_pto",
+] as const;
+export type DashboardWidgetId = typeof DASHBOARD_WIDGET_IDS[number];
+export type DashboardWidgetSize = "compact" | "standard" | "wide";
+export type DashboardWidget = { id: DashboardWidgetId; size: DashboardWidgetSize };
+export type Profile = { email: string; fullName: string; role: Role; active: boolean; userId?: string; departmentId?: string; shiftColor?: ShiftColor; shiftPeriod?: "Day" | "Night"; createdAt?: string };
 export type Department = { id: string; name: string; defaultCostCode: string; active: boolean; createdAt?: string; updatedAt?: string };
 export type Employee = {
   id: string;
@@ -51,6 +72,7 @@ export type TrackerBundle = {
   overtimeEntries: OvertimeEntry[];
   ptoEntries: PtoEntry[];
   scheduleOverrides: Override[];
+  dashboardWidgets: DashboardWidget[];
   profiles: Profile[];
   auditLog: Audit[];
 };
@@ -77,6 +99,21 @@ type OvertimeRow = {
 type PtoRow = { id: string; pto_date: string; employee_id: string; hours: number | string; pto_type: string; notes: string; entered_by: string; created_at: string };
 type OverrideRow = { work_date: string; shift_color: ShiftColor; reason: string; updated_by: string; updated_at: string };
 type AuditRow = { id: string; action: string; entity_type: string; entity_id: string; details: unknown; user_email: string; created_at: string };
+type DashboardPreferenceRow = { widgets: unknown };
+
+export const DEFAULT_DASHBOARD_WIDGETS: DashboardWidget[] = [
+  { id: "shift_today", size: "wide" },
+  { id: "kpi_ot", size: "compact" },
+  { id: "kpi_pto", size: "compact" },
+  { id: "kpi_employees", size: "compact" },
+  { id: "kpi_ot_people", size: "compact" },
+  { id: "ot_trend", size: "wide" },
+  { id: "department_ot", size: "standard" },
+  { id: "shift_ot", size: "standard" },
+  { id: "schedule", size: "wide" },
+  { id: "selected_ot", size: "standard" },
+  { id: "selected_pto", size: "standard" },
+];
 
 function check(error: DbError, action: string) {
   if (error) throw new Error(`Supabase could not ${action}: ${error.message}`);
@@ -99,6 +136,22 @@ function asHours(value: unknown) {
 
 function textValue(value: unknown, max = 250) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
+}
+
+function dashboardWidgets(value: unknown): DashboardWidget[] {
+  if (!Array.isArray(value)) throw new Error("Dashboard layout must be a list of approved widgets.");
+  if (value.length > DASHBOARD_WIDGET_IDS.length) throw new Error("Dashboard layout contains too many widgets.");
+  const allowedIds = new Set<string>(DASHBOARD_WIDGET_IDS);
+  const seen = new Set<string>();
+  return value.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("Dashboard layout contains an invalid widget.");
+    const id = "id" in item ? item.id : undefined;
+    const size = "size" in item ? item.size : undefined;
+    if (typeof id !== "string" || !allowedIds.has(id) || seen.has(id)) throw new Error("Dashboard layout contains an unknown or duplicate widget.");
+    if (size !== "compact" && size !== "standard" && size !== "wide") throw new Error("Dashboard widget size is invalid.");
+    seen.add(id);
+    return { id: id as DashboardWidgetId, size };
+  });
 }
 
 function requireWrite(role: Role) {
@@ -161,7 +214,7 @@ async function currentProfile(db: SupabaseClient): Promise<Profile> {
   const row = result.data as unknown as ProfileRow | null;
   if (!row) throw new Error("Your email has not been approved for this tracker. Ask an administrator to add the exact email used to sign in.");
   if (!row.active) throw new Error("Your tracker account is inactive.");
-  return profile(row);
+  return { ...profile(row), userId: userResult.data.user?.id };
 }
 
 async function departmentRows() {
@@ -200,18 +253,21 @@ function validReason(value: unknown, fallback = "") {
 
 export async function loadBundle(): Promise<TrackerBundle> {
   const session = await currentProfile(supabase);
-  const [departmentResult, employeeResult, overtimeRows, ptoRows, overrideResult, profileResult, auditResult] = await Promise.all([
+  if (!session.userId) throw new Error("Your Supabase account is missing a user ID.");
+  const [departmentResult, employeeResult, overtimeRows, ptoRows, overrideResult, dashboardResult, profileResult, auditResult] = await Promise.all([
     supabase.from("departments").select("*").order("active", { ascending: false }).order("name"),
     supabase.from("employees").select("*").order("shift_color").order("shift_period").order("name"),
     allEntryRows("overtime_entries", "work_date"),
     allEntryRows("pto_entries", "pto_date"),
     supabase.from("schedule_overrides").select("*").order("work_date", { ascending: false }),
+    supabase.from("dashboard_preferences").select("widgets").eq("user_id", session.userId).maybeSingle(),
     session.role === "admin" ? supabase.from("profiles").select("*").order("full_name") : Promise.resolve({ data: [], error: null }),
     session.role === "admin" ? supabase.from("audit_log").select("*").order("created_at", { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
   ]);
   check(departmentResult.error, "load departments");
   check(employeeResult.error, "load employees");
   check(overrideResult.error, "load schedule corrections");
+  check(dashboardResult.error, "load your dashboard layout");
   check(profileResult.error, "load approved users");
   check(auditResult.error, "load audit history");
 
@@ -223,6 +279,7 @@ export async function loadBundle(): Promise<TrackerBundle> {
     overtimeEntries: (overtimeRows as OvertimeRow[]).map(overtime),
     ptoEntries: (ptoRows as PtoRow[]).map(pto),
     scheduleOverrides: ((overrideResult.data ?? []) as unknown as OverrideRow[]).map(override),
+    dashboardWidgets: dashboardResult.data ? dashboardWidgets((dashboardResult.data as unknown as DashboardPreferenceRow).widgets) : DEFAULT_DASHBOARD_WIDGETS.map((widget) => ({ ...widget })),
     profiles: ((profileResult.data ?? []) as unknown as ProfileRow[]).map(profile),
     auditLog: ((auditResult.data ?? []) as unknown as AuditRow[]).map(audit),
   };
@@ -232,7 +289,12 @@ export async function mutateTracker(payload: Record<string, unknown>): Promise<T
   const action = textValue(payload.action, 50);
   const session = await currentProfile(supabase);
 
-  if (action === "add_department" || action === "update_department") {
+  if (action === "save_dashboard_layout") {
+    if (!session.userId) throw new Error("Your Supabase account is missing a user ID.");
+    const widgets = dashboardWidgets(payload.widgets);
+    const result = await supabase.from("dashboard_preferences").upsert({ user_id: session.userId, widgets, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+    check(result.error, "save your dashboard layout");
+  } else if (action === "add_department" || action === "update_department") {
     requireAdmin(session.role);
     const name = textValue(payload.name, 100);
     const defaultCostCode = textValue(payload.defaultCostCode, 50).toUpperCase();
