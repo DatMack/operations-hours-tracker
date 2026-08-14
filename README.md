@@ -1,6 +1,15 @@
 # Operations Hours Tracker
 
-A private, role-based overtime, PTO, employee, and 2-2-3 shift tracking app for operations teams.
+A private, role-based overtime, PTO, employee, department, and 2-2-3 shift tracking app for company operations teams.
+
+## Company-wide features
+
+- Configurable departments with default cost codes and safe deactivation.
+- Four crews: Blue Day, Blue Night, Yellow Day, and Yellow Night.
+- Overtime entry with quick hours, working department, cost code, reason, and notes.
+- Historical employee, department, and shift snapshots so later transfers or renames do not rewrite old reports.
+- Dashboard department distribution and reports filtered by employee, department, shift, cost code, reason, and date.
+- CSV employee and historical-data imports plus Excel-ready report exports.
 
 ## Architecture
 
@@ -17,6 +26,9 @@ The Supabase **publishable** key is intentionally used by the browser. It is not
 - No anonymous table access; approved Supabase Auth users only.
 - PostgreSQL-enforced admin, supervisor, and viewer permissions.
 - Database validation prevents scheduled-shift overtime outside the UI.
+- Database validation blocks duplicate employee/date/department/cost-code overtime and non-quarter-hour values.
+- Department records are deactivated rather than deleted, preserving reporting history.
+- Overtime records retain historical employee, department, and shift snapshots.
 - Database-triggered, administrator-only audit history.
 - Protection against disabling the last active administrator.
 - 30-minute browser inactivity timeout and a restrictive Content Security Policy.
@@ -26,7 +38,7 @@ Do not import real employee information until every item in `SECURITY_CHECKLIST.
 
 ## First deployment
 
-1. In Supabase SQL Editor, run `supabase/migrations/20260814010000_github_pages_auth_rls.sql`.
+1. In Supabase SQL Editor, run the files in `supabase/migrations` in filename order. Existing installations only need migrations that have not already been applied.
 2. In Supabase Authentication, create the first email/password user.
 3. Edit and run `supabase/ADMIN_SETUP.sql` with the exact same email.
 4. In GitHub, open **Settings → Pages** and select **GitHub Actions** as the source.
@@ -45,6 +57,6 @@ The project includes the current Supabase project URL and browser-safe publishab
 
 ## Roles
 
-- **Admin:** employees, imports, schedule corrections, user approvals, reports, OT/PTO, and audit history.
+- **Admin:** departments, employees, imports, schedule corrections, user approvals, reports, OT/PTO, and audit history.
 - **Supervisor:** OT and PTO entry/deletion plus read-only operational views.
 - **Viewer:** read-only access.

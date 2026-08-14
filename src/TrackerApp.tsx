@@ -1,52 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { shiftForDate, toDateInput, type ShiftColor } from "./lib/schedule";
-import { loadBundle, mutateTracker } from "./lib/tracker-api";
+import {
+  loadBundle,
+  mutateTracker,
+  OT_REASONS,
+  type Department,
+  type Employee,
+  type OvertimeEntry,
+  type Override,
+  type PtoEntry,
+  type TrackerBundle,
+} from "./lib/tracker-api";
 
-type Role = "admin" | "supervisor" | "viewer";
-type Employee = {
-  id: string;
-  name: string;
-  shiftColor: ShiftColor;
-  shiftPeriod: "Day" | "Night";
-  department: string;
-  active: boolean;
-};
-type OvertimeEntry = {
-  id: string;
-  workDate: string;
-  employeeId: string;
-  hours: number;
-  costCode: string;
-  notes: string;
-  enteredBy: string;
-  createdAt: string;
-};
-type PtoEntry = {
-  id: string;
-  ptoDate: string;
-  employeeId: string;
-  hours: number;
-  ptoType: string;
-  notes: string;
-  enteredBy: string;
-  createdAt: string;
-};
-type Override = { workDate: string; shiftColor: ShiftColor; reason: string; updatedBy: string };
-type Profile = { email: string; fullName: string; role: Role; active: boolean };
-type Audit = { id: string; action: string; entityType: string; details: string; userEmail: string; createdAt: string };
-type Bundle = {
-  backend: "d1" | "supabase";
-  session: Profile;
-  employees: Employee[];
-  overtimeEntries: OvertimeEntry[];
-  ptoEntries: PtoEntry[];
-  scheduleOverrides: Override[];
-  profiles: Profile[];
-  auditLog: Audit[];
-};
-
-type Tab = "dashboard" | "overtime" | "pto" | "employees" | "calendar" | "reports" | "admin";
+type Tab = "dashboard" | "overtime" | "pto" | "employees" | "calendar" | "reports" | "settings" | "admin";
 type ImportKind = "employees" | "history";
+type OvertimeEditor = { employee: Employee; entry?: OvertimeEntry };
 
 const NAV: Array<{ id: Tab; code: string; label: string }> = [
   { id: "dashboard", code: "DB", label: "Dashboard" },
@@ -55,6 +23,7 @@ const NAV: Array<{ id: Tab; code: string; label: string }> = [
   { id: "employees", code: "EM", label: "Employees" },
   { id: "calendar", code: "SC", label: "Shift Calendar" },
   { id: "reports", code: "RP", label: "Reports" },
+  { id: "settings", code: "ST", label: "Company Setup" },
   { id: "admin", code: "AD", label: "Admin" },
 ];
 
@@ -83,14 +52,23 @@ function addDays(value: string, amount: number) {
   return toDateInput(date);
 }
 
+function weekDates(value: string) {
+  const date = dateFromInput(value);
+  const mondayOffset = (date.getDay() + 6) % 7;
+  const monday = addDays(value, -mondayOffset);
+  return Array.from({ length: 7 }, (_, index) => addDays(monday, index));
+}
+
 function currentMonthRange(dateValue: string) {
   const date = dateFromInput(dateValue);
-  const year = date.getFullYear();
-  const month = date.getMonth();
   return {
-    start: toDateInput(new Date(year, month, 1)),
-    end: toDateInput(new Date(year, month + 1, 0)),
+    start: toDateInput(new Date(date.getFullYear(), date.getMonth(), 1)),
+    end: toDateInput(new Date(date.getFullYear(), date.getMonth() + 1, 0)),
   };
+}
+
+function initials(name: string) {
+  return name.split(" ").filter(Boolean).map((part) => part[0]).slice(0, 2).join("").toUpperCase() || "?";
 }
 
 function ShiftBadge({ color, compact = false }: { color: ShiftColor; compact?: boolean }) {
@@ -113,20 +91,28 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 }
 
 export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unknown> }) {
-  const [data, setData] = useState<Bundle | null>(null);
+  const [data, setData] = useState<TrackerBundle | null>(null);
   const [tab, setTab] = useState<Tab>("dashboard");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [selectedDate, setSelectedDate] = useState(() => toDateInput(new Date()));
   const [calendarMonth, setCalendarMonth] = useState(() => toDateInput(new Date()));
-  const [otEmployee, setOtEmployee] = useState<Employee | null>(null);
+  const [overtimeEditor, setOvertimeEditor] = useState<OvertimeEditor | null>(null);
   const [ptoEmployee, setPtoEmployee] = useState<Employee | null>(null);
   const [overrideDate, setOverrideDate] = useState<string | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+  const [editingDepartment, setEditingDepartment] = useState<Department | null>(null);
   const [importKind, setImportKind] = useState<ImportKind | null>(null);
+  const [rosterSearch, setRosterSearch] = useState("");
+  const [rosterDepartment, setRosterDepartment] = useState("all");
   const [reportStart, setReportStart] = useState(() => `${new Date().getFullYear()}-01-01`);
   const [reportEnd, setReportEnd] = useState(() => `${new Date().getFullYear()}-12-31`);
+  const [reportEmployee, setReportEmployee] = useState("all");
+  const [reportDepartment, setReportDepartment] = useState("all");
+  const [reportShift, setReportShift] = useState("all");
+  const [reportCostCode, setReportCostCode] = useState("all");
+  const [reportReason, setReportReason] = useState("all");
 
   async function load() {
     try {
@@ -169,36 +155,62 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
   const workingColor = data ? shiftForDate(selectedDate, data.scheduleOverrides) : "Blue";
   const canWrite = data?.session.role === "admin" || data?.session.role === "supervisor";
   const isAdmin = data?.session.role === "admin";
-  const visibleNav = NAV.filter((item) => item.id !== "admin" || isAdmin);
+  const visibleNav = NAV.filter((item) => (item.id !== "admin" && item.id !== "settings") || isAdmin);
 
   if (!data) {
     return (
       <main className="loading-shell">
-        <div className="loading-card"><div className="brand-box">OT</div><h1>Operations Hours Tracker</h1><span className="loader" />
-          <p>{error || "Opening the secure tracker…"}</p>{error && <div className="button-row"><button className="secondary-button" onClick={() => void onSignOut()}>Sign out</button><button className="primary-button" onClick={() => void load()}>Try again</button></div>}
+        <div className="loading-card">
+          <div className="brand-box">OT</div><h1>Operations Hours Tracker</h1><span className="loader" />
+          <p>{error || "Opening the secure tracker…"}</p>
+          {error && <div className="button-row"><button className="secondary-button" onClick={() => void onSignOut()}>Sign out</button><button className="primary-button" onClick={() => void load()}>Try again</button></div>}
         </div>
       </main>
     );
   }
 
+  const activeDepartments = data.departments.filter((department) => department.active);
   const monthRange = currentMonthRange(selectedDate);
   const monthOt = data.overtimeEntries.filter((entry) => entry.workDate >= monthRange.start && entry.workDate <= monthRange.end);
   const monthPto = data.ptoEntries.filter((entry) => entry.ptoDate >= monthRange.start && entry.ptoDate <= monthRange.end);
   const selectedOt = data.overtimeEntries.filter((entry) => entry.workDate === selectedDate);
   const selectedPto = data.ptoEntries.filter((entry) => entry.ptoDate === selectedDate);
+  const rosterEmployees = activeEmployees.filter((employee) => {
+    const matchesDepartment = rosterDepartment === "all" || employee.departmentId === rosterDepartment;
+    const query = rosterSearch.trim().toLowerCase();
+    return matchesDepartment && (!query || employee.name.toLowerCase().includes(query));
+  });
+  const costCodes = Array.from(new Set(data.overtimeEntries.map((entry) => entry.costCode))).sort();
+  const reasons = Array.from(new Set(data.overtimeEntries.map((entry) => entry.reason))).sort();
+  const filteredOt = data.overtimeEntries.filter((entry) => {
+    if (entry.workDate < reportStart || entry.workDate > reportEnd) return false;
+    if (reportEmployee !== "all" && entry.employeeId !== reportEmployee) return false;
+    if (reportDepartment !== "all" && entry.departmentId !== reportDepartment) return false;
+    if (reportShift !== "all" && entry.shiftName !== reportShift) return false;
+    if (reportCostCode !== "all" && entry.costCode !== reportCostCode) return false;
+    if (reportReason !== "all" && entry.reason !== reportReason) return false;
+    return true;
+  });
+  const filteredPto = data.ptoEntries.filter((entry) => {
+    if (entry.ptoDate < reportStart || entry.ptoDate > reportEnd) return false;
+    const employee = employeesById.get(entry.employeeId);
+    if (reportEmployee !== "all" && entry.employeeId !== reportEmployee) return false;
+    if (reportDepartment !== "all" && employee?.departmentId !== reportDepartment) return false;
+    if (reportShift !== "all" && `${employee?.shiftColor} ${employee?.shiftPeriod}` !== reportShift) return false;
+    return true;
+  });
+  const departmentTotals = Array.from(monthOt.reduce((totals, entry) => {
+    totals.set(entry.departmentName, (totals.get(entry.departmentName) ?? 0) + entry.hours);
+    return totals;
+  }, new Map<string, number>())).sort((a, b) => b[1] - a[1]);
 
   function downloadReport() {
-    const filteredOt = data!.overtimeEntries.filter((entry) => entry.workDate >= reportStart && entry.workDate <= reportEnd);
-    const filteredPto = data!.ptoEntries.filter((entry) => entry.ptoDate >= reportStart && entry.ptoDate <= reportEnd);
     const rows = [
-      ["type", "date", "employee_name", "hours", "code_or_type", "notes", "shift_color", "shift_period", "entered_by"],
-      ...filteredOt.map((entry) => {
-        const employee = employeesById.get(entry.employeeId);
-        return ["OT", entry.workDate, employee?.name || "Unknown", entry.hours, entry.costCode, entry.notes, employee?.shiftColor || "", employee?.shiftPeriod || "", entry.enteredBy];
-      }),
+      ["type", "date", "employee_name", "hours", "department", "cost_code_or_pto_type", "reason", "notes", "shift", "entered_by"],
+      ...filteredOt.map((entry) => ["OT", entry.workDate, entry.employeeName, entry.hours, entry.departmentName, entry.costCode, entry.reason, entry.notes, entry.shiftName, entry.enteredBy]),
       ...filteredPto.map((entry) => {
         const employee = employeesById.get(entry.employeeId);
-        return ["PTO", entry.ptoDate, employee?.name || "Unknown", entry.hours, entry.ptoType, entry.notes, employee?.shiftColor || "", employee?.shiftPeriod || "", entry.enteredBy];
+        return ["PTO", entry.ptoDate, employee?.name || "Unknown", entry.hours, employee?.department || "", entry.ptoType, "", entry.notes, employee ? `${employee.shiftColor} ${employee.shiftPeriod}` : "", entry.enteredBy];
       }),
     ];
     const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
@@ -210,10 +222,20 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
     URL.revokeObjectURL(url);
   }
 
+  const emptyEmployee: Employee = {
+    id: "",
+    name: "",
+    shiftColor: "Blue",
+    shiftPeriod: "Day",
+    departmentId: activeDepartments[0]?.id ?? "",
+    department: activeDepartments[0]?.name ?? "",
+    active: true,
+  };
+
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand"><div className="brand-box">OT</div><div><strong>Overtime & PTO</strong><span>Operations tracker · {data.backend === "supabase" ? "Supabase" : "Secure DB"}</span></div></div>
+        <div className="brand"><div className="brand-box">OT</div><div><strong>Overtime & PTO</strong><span>Company operations tracker · Supabase</span></div></div>
         <div className="account"><span className="status-dot" /><div><strong>{data.session.fullName}</strong><span>{data.session.role}</span></div><button className="signout-button" onClick={() => void onSignOut()}>Sign out</button></div>
       </header>
 
@@ -226,51 +248,57 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
 
         {tab === "dashboard" && (
           <>
-            <div className="page-heading"><div><p className="eyebrow">Operations overview</p><h1>Dashboard</h1><span>{prettyDate(selectedDate)} · Current schedule and monthly activity</span></div><label className="date-control"><span>View date</span><input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label></div>
+            <div className="page-heading"><div><p className="eyebrow">Company operations overview</p><h1>Dashboard</h1><span>{prettyDate(selectedDate)} · Current schedule and monthly activity</span></div><label className="date-control"><span>View date</span><input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label></div>
             <section className={`shift-hero ${workingColor.toLowerCase()}`}>
               <div><span className="hero-kicker">Scheduled today</span><h2>{workingColor} Shift</h2><p>Both {workingColor} Day and {workingColor} Night crews are on their regular 2-2-3 schedule.</p></div>
               <div className="hero-count"><strong>{activeEmployees.filter((employee) => employee.shiftColor === workingColor).length}</strong><span>scheduled employees</span></div>
               {data.scheduleOverrides.some((item) => item.workDate === selectedDate) && <span className="override-flag">Admin corrected</span>}
             </section>
-            {!activeEmployees.length && <section className="setup-banner"><div><span className="setup-number">1</span><div><strong>Your tracker is clean and ready</strong><span>Add employees individually or import the complete roster from a CSV file.</span></div></div><div className="button-row"><button className="secondary-button" onClick={() => setImportKind("employees")}>Import roster</button><button className="primary-button" onClick={() => setTab("employees")}>Add employees</button></div></section>}
+            {!activeEmployees.length && <section className="setup-banner"><div><span className="setup-number">1</span><div><strong>Your tracker is clean and ready</strong><span>Confirm departments, then add employees individually or import the complete roster.</span></div></div><div className="button-row">{isAdmin && <button className="secondary-button" onClick={() => setTab("settings")}>Review departments</button>}<button className="primary-button" onClick={() => setTab("employees")}>Add employees</button></div></section>}
             <section className="metric-grid">
               <article><span className="metric-label">Overtime this month</span><strong>{monthOt.reduce((sum, entry) => sum + entry.hours, 0).toFixed(1)}<small> hrs</small></strong><em>{monthOt.length} entries</em></article>
               <article><span className="metric-label">PTO this month</span><strong>{monthPto.reduce((sum, entry) => sum + entry.hours, 0).toFixed(1)}<small> hrs</small></strong><em>{monthPto.length} entries</em></article>
-              <article><span className="metric-label">Active employees</span><strong>{activeEmployees.length}</strong><em>{activeEmployees.filter((employee) => employee.shiftColor === "Blue").length} Blue · {activeEmployees.filter((employee) => employee.shiftColor === "Yellow").length} Yellow</em></article>
-              <article><span className="metric-label">Schedule corrections</span><strong>{data.scheduleOverrides.length}</strong><em>saved overrides</em></article>
+              <article><span className="metric-label">Active employees</span><strong>{activeEmployees.length}</strong><em>{activeDepartments.length} active departments</em></article>
+              <article><span className="metric-label">Employees with OT</span><strong>{new Set(monthOt.map((entry) => entry.employeeId)).size}</strong><em>{monthOt.length ? (monthOt.reduce((sum, entry) => sum + entry.hours, 0) / monthOt.length).toFixed(1) : "0.0"} avg hrs / entry</em></article>
             </section>
             <section className="panel"><div className="panel-head"><div><p className="eyebrow">Looking ahead</p><h2>Next 14 days</h2></div><button className="text-button" onClick={() => setTab("calendar")}>Full calendar →</button></div>
               <div className="forecast-grid">{Array.from({ length: 14 }, (_, index) => addDays(selectedDate, index)).map((date) => { const color = shiftForDate(date, data.scheduleOverrides); return <div className={`forecast-day ${color.toLowerCase()}`} key={date}><span>{dateFromInput(date).toLocaleDateString("en-US", { weekday: "short" })}</span><strong>{dateFromInput(date).getDate()}</strong><ShiftBadge color={color} compact /></div>; })}</div>
             </section>
-            <section className="two-column"><div className="panel"><div className="panel-head"><h2>Overtime on {prettyDate(selectedDate, true)}</h2><button className="text-button" onClick={() => setTab("overtime")}>Manage →</button></div>{selectedOt.length ? <div className="activity-list">{selectedOt.map((entry) => <div key={entry.id}><span className="avatar">{(employeesById.get(entry.employeeId)?.name || "?").slice(0, 2).toUpperCase()}</span><div><strong>{employeesById.get(entry.employeeId)?.name}</strong><small>{entry.costCode}</small></div><b>{entry.hours} hrs</b></div>)}</div> : <EmptyState title="No overtime entered" body="Entries for this date will appear here." />}</div>
-              <div className="panel"><div className="panel-head"><h2>PTO on {prettyDate(selectedDate, true)}</h2><button className="text-button" onClick={() => setTab("pto")}>Manage →</button></div>{selectedPto.length ? <div className="activity-list">{selectedPto.map((entry) => <div key={entry.id}><span className="avatar">{(employeesById.get(entry.employeeId)?.name || "?").slice(0, 2).toUpperCase()}</span><div><strong>{employeesById.get(entry.employeeId)?.name}</strong><small>{entry.ptoType}</small></div><b>{entry.hours} hrs</b></div>)}</div> : <EmptyState title="No PTO entered" body="PTO entries for this date will appear here." />}</div>
+            <section className="two-column">
+              <div className="panel"><div className="panel-head"><div><p className="eyebrow">Monthly distribution</p><h2>Hours by department</h2></div></div><DepartmentBreakdown totals={departmentTotals} /></div>
+              <div className="panel"><div className="panel-head"><h2>Overtime on {prettyDate(selectedDate, true)}</h2><button className="text-button" onClick={() => setTab("overtime")}>Manage →</button></div>{selectedOt.length ? <div className="activity-list">{selectedOt.map((entry) => <div key={entry.id}><span className="avatar">{initials(entry.employeeName)}</span><div><strong>{entry.employeeName}</strong><small>{entry.departmentName} · {entry.costCode} · {entry.reason}</small></div><b>{entry.hours} hrs</b></div>)}</div> : <EmptyState title="No overtime entered" body="Entries for this date will appear here." />}</div>
             </section>
+            <section className="panel"><div className="panel-head"><h2>PTO on {prettyDate(selectedDate, true)}</h2><button className="text-button" onClick={() => setTab("pto")}>Manage →</button></div>{selectedPto.length ? <div className="activity-list">{selectedPto.map((entry) => { const employee = employeesById.get(entry.employeeId); return <div key={entry.id}><span className="avatar">{initials(employee?.name || "Unknown")}</span><div><strong>{employee?.name || "Unknown"}</strong><small>{employee?.department || "No department"} · {entry.ptoType}</small></div><b>{entry.hours} hrs</b></div>; })}</div> : <EmptyState title="No PTO entered" body="PTO entries for this date will appear here." />}</section>
           </>
         )}
 
         {tab === "overtime" && (
           <>
-            <div className="page-heading"><div><p className="eyebrow">Supervisor entry</p><h1>Overtime Entry</h1><span>Scheduled employees are automatically blocked.</span></div><label className="date-control"><span>Overtime date</span><input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label></div>
+            <div className="page-heading"><div><p className="eyebrow">Company-wide supervisor entry</p><h1>Overtime Entry</h1><span>Choose the employee, working department, cost code, reason, and hours.</span></div><label className="date-control"><span>Overtime date</span><input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label></div>
+            <WeekOverview dates={weekDates(selectedDate)} selectedDate={selectedDate} setSelectedDate={setSelectedDate} entries={data.overtimeEntries} overrides={data.scheduleOverrides} />
             <div className="schedule-banner"><div><ShiftBadge color={workingColor} /><strong>{workingColor} is working {prettyDate(selectedDate)}</strong></div><span>Employees on {workingColor} shift show “Working” and cannot be added.</span></div>
-            <section className="panel"><div className="panel-head"><div><p className="eyebrow">Available roster</p><h2>Select an employee</h2></div><span className="subtle-count">{activeEmployees.filter((employee) => employee.shiftColor !== workingColor).length} available</span></div>
-              {activeEmployees.length ? <div className="roster-grid">{activeEmployees.map((employee) => { const scheduled = employee.shiftColor === workingColor; return <article className={`employee-card ${scheduled ? "scheduled" : ""}`} key={employee.id}><div className="employee-main"><span className="avatar large">{employee.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div><strong>{employee.name}</strong><span><ShiftBadge color={employee.shiftColor} compact /> {employee.shiftPeriod}</span></div></div>{scheduled ? <span className="working-pill">Working</span> : <button className="add-button" disabled={!canWrite} onClick={() => setOtEmployee(employee)} aria-label={`Add overtime for ${employee.name}`}>+</button>}</article>; })}</div> : <EmptyState title="Add employees first" body="The overtime roster will appear after your employee setup is complete." />}
+            <RosterFilters departments={activeDepartments} department={rosterDepartment} setDepartment={setRosterDepartment} search={rosterSearch} setSearch={setRosterSearch} />
+            <section className="panel"><div className="panel-head"><div><p className="eyebrow">Available roster</p><h2>Select an employee</h2></div><span className="subtle-count">{rosterEmployees.filter((employee) => employee.shiftColor !== workingColor).length} available · {rosterEmployees.length} shown</span></div>
+              {rosterEmployees.length ? <div className="roster-grid">{rosterEmployees.map((employee) => { const scheduled = employee.shiftColor === workingColor; return <article className={`employee-card ${scheduled ? "scheduled" : ""}`} key={employee.id}><div className="employee-main"><span className="avatar large">{initials(employee.name)}</span><div><strong>{employee.name}</strong><span>{employee.department}</span><span><ShiftBadge color={employee.shiftColor} compact /> {employee.shiftPeriod}</span></div></div>{scheduled ? <span className="working-pill">Working</span> : <button className="add-button" disabled={!canWrite} onClick={() => setOvertimeEditor({ employee })} aria-label={`Add overtime for ${employee.name}`}>+</button>}</article>; })}</div> : <EmptyState title="No employees match" body="Clear the search or choose another department." />}
             </section>
-            <EntryTable title={`Entries for ${prettyDate(selectedDate)}`} entries={selectedOt.map((entry) => ({ id: entry.id, name: employeesById.get(entry.employeeId)?.name || "Unknown", detail: entry.costCode, hours: entry.hours, notes: entry.notes }))} canDelete={Boolean(canWrite)} onDelete={(id) => void mutate({ action: "delete_overtime", id }, "Overtime entry removed.")} />
+            <EntryTable title={`Entries for ${prettyDate(selectedDate)}`} entries={selectedOt.map((entry) => ({ id: entry.id, name: entry.employeeName, detail: `${entry.departmentName} · ${entry.costCode}`, subdetail: entry.reason, hours: entry.hours, notes: entry.notes }))} canChange={Boolean(canWrite)} onEdit={(id) => { const entry = selectedOt.find((item) => item.id === id); const employee = entry && employeesById.get(entry.employeeId); if (entry && employee) setOvertimeEditor({ employee, entry }); }} onDelete={(id) => void mutate({ action: "delete_overtime", id }, "Overtime entry removed.")} />
           </>
         )}
 
         {tab === "pto" && (
           <>
-            <div className="page-heading"><div><p className="eyebrow">Time-off log</p><h1>PTO Tracking</h1><span>Record vacation, sick, personal, or other approved time.</span></div><label className="date-control"><span>PTO date</span><input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label></div>
-            <section className="panel"><div className="panel-head"><div><p className="eyebrow">Employee roster</p><h2>Select an employee</h2></div></div>{activeEmployees.length ? <div className="roster-grid">{activeEmployees.map((employee) => <article className="employee-card" key={employee.id}><div className="employee-main"><span className="avatar large">{employee.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div><strong>{employee.name}</strong><span><ShiftBadge color={employee.shiftColor} compact /> {employee.shiftPeriod}</span></div></div><button className="add-button" disabled={!canWrite} onClick={() => setPtoEmployee(employee)} aria-label={`Add PTO for ${employee.name}`}>+</button></article>)}</div> : <EmptyState title="Add employees first" body="The PTO roster will appear after your employee setup is complete." />}</section>
-            <EntryTable title={`PTO for ${prettyDate(selectedDate)}`} entries={selectedPto.map((entry) => ({ id: entry.id, name: employeesById.get(entry.employeeId)?.name || "Unknown", detail: entry.ptoType, hours: entry.hours, notes: entry.notes }))} canDelete={Boolean(canWrite)} onDelete={(id) => void mutate({ action: "delete_pto", id }, "PTO entry removed.")} />
+            <div className="page-heading"><div><p className="eyebrow">Company time-off log</p><h1>PTO Tracking</h1><span>Record vacation, sick, personal, or other approved time.</span></div><label className="date-control"><span>PTO date</span><input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label></div>
+            <RosterFilters departments={activeDepartments} department={rosterDepartment} setDepartment={setRosterDepartment} search={rosterSearch} setSearch={setRosterSearch} />
+            <section className="panel"><div className="panel-head"><div><p className="eyebrow">Employee roster</p><h2>Select an employee</h2></div><span className="subtle-count">{rosterEmployees.length} shown</span></div>{rosterEmployees.length ? <div className="roster-grid">{rosterEmployees.map((employee) => <article className="employee-card" key={employee.id}><div className="employee-main"><span className="avatar large">{initials(employee.name)}</span><div><strong>{employee.name}</strong><span>{employee.department}</span><span><ShiftBadge color={employee.shiftColor} compact /> {employee.shiftPeriod}</span></div></div><button className="add-button" disabled={!canWrite} onClick={() => setPtoEmployee(employee)} aria-label={`Add PTO for ${employee.name}`}>+</button></article>)}</div> : <EmptyState title="No employees match" body="Clear the search or choose another department." />}</section>
+            <EntryTable title={`PTO for ${prettyDate(selectedDate)}`} entries={selectedPto.map((entry) => ({ id: entry.id, name: employeesById.get(entry.employeeId)?.name || "Unknown", detail: employeesById.get(entry.employeeId)?.department || "No department", subdetail: entry.ptoType, hours: entry.hours, notes: entry.notes }))} canChange={Boolean(canWrite)} onDelete={(id) => void mutate({ action: "delete_pto", id }, "PTO entry removed.")} />
           </>
         )}
 
         {tab === "employees" && (
           <>
-            <div className="page-heading"><div><p className="eyebrow">Roster setup</p><h1>Employees</h1><span>Assign each employee to their color and Day or Night period.</span></div>{isAdmin && <div className="heading-actions"><button className="secondary-button" onClick={() => setImportKind("employees")}>Import CSV</button><button className="primary-button" onClick={() => setEditingEmployee({ id: "", name: "", shiftColor: "Blue", shiftPeriod: "Day", department: "Extrusion", active: true })}>+ Add employee</button></div>}</div>
-            <section className="panel table-panel">{data.employees.length ? <div className="table-wrap"><table><thead><tr><th>Employee</th><th>Department</th><th>Shift</th><th>Period</th><th>Status</th>{isAdmin && <th />}</tr></thead><tbody>{data.employees.map((employee) => <tr key={employee.id} className={!employee.active ? "inactive-row" : ""}><td><div className="person-cell"><span className="avatar">{employee.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><strong>{employee.name}</strong></div></td><td>{employee.department}</td><td><ShiftBadge color={employee.shiftColor} compact /></td><td>{employee.shiftPeriod}</td><td><span className={`status-pill ${employee.active ? "active" : "inactive"}`}>{employee.active ? "Active" : "Inactive"}</span></td>{isAdmin && <td><button className="text-button" onClick={() => setEditingEmployee(employee)}>Edit</button></td>}</tr>)}</tbody></table></div> : <EmptyState title="No employees added" body="Use Add employee or Import CSV to build your real roster." />}</section>
+            <div className="page-heading"><div><p className="eyebrow">Company roster</p><h1>Employees</h1><span>Assign every employee to a configured department and one of the four crews.</span></div>{isAdmin && <div className="heading-actions"><button className="secondary-button" onClick={() => setImportKind("employees")}>Import CSV</button><button className="primary-button" disabled={!activeDepartments.length} onClick={() => setEditingEmployee(emptyEmployee)}>+ Add employee</button></div>}</div>
+            {!activeDepartments.length && <div className="alert error"><span>!</span>Add an active department in Company Setup before adding employees.</div>}
+            <section className="panel table-panel">{data.employees.length ? <div className="table-wrap"><table><thead><tr><th>Employee</th><th>Department</th><th>Shift</th><th>Period</th><th>Status</th>{isAdmin && <th />}</tr></thead><tbody>{data.employees.map((employee) => <tr key={employee.id} className={!employee.active ? "inactive-row" : ""}><td><div className="person-cell"><span className="avatar">{initials(employee.name)}</span><strong>{employee.name}</strong></div></td><td>{employee.department}</td><td><ShiftBadge color={employee.shiftColor} compact /></td><td>{employee.shiftPeriod}</td><td><span className={`status-pill ${employee.active ? "active" : "inactive"}`}>{employee.active ? "Active" : "Inactive"}</span></td>{isAdmin && <td><button className="text-button" onClick={() => setEditingEmployee(employee)}>Edit</button></td>}</tr>)}</tbody></table></div> : <EmptyState title="No employees added" body="Use Add employee or Import CSV to build the company roster." />}</section>
           </>
         )}
 
@@ -278,38 +306,79 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
 
         {tab === "reports" && (
           <>
-            <div className="page-heading"><div><p className="eyebrow">Hours and history</p><h1>Reports</h1><span>Review totals and download an Excel-ready CSV backup.</span></div><div className="heading-actions">{isAdmin && <button className="secondary-button" onClick={() => setImportKind("history")}>Import history</button>}<button className="primary-button" onClick={downloadReport}>Download CSV</button></div></div>
-            <section className="filter-bar"><label><span>From</span><input type="date" value={reportStart} onChange={(event) => setReportStart(event.target.value)} /></label><label><span>Through</span><input type="date" value={reportEnd} onChange={(event) => setReportEnd(event.target.value)} /></label><div><span>Included</span><strong>{data.overtimeEntries.filter((entry) => entry.workDate >= reportStart && entry.workDate <= reportEnd).length} OT · {data.ptoEntries.filter((entry) => entry.ptoDate >= reportStart && entry.ptoDate <= reportEnd).length} PTO</strong></div></section>
-            <ReportTable data={data} employeesById={employeesById} start={reportStart} end={reportEnd} />
+            <div className="page-heading"><div><p className="eyebrow">Company hours and history</p><h1>Reports</h1><span>Filter by employee, department, crew, cost code, or overtime reason.</span></div><div className="heading-actions">{isAdmin && <button className="secondary-button" onClick={() => setImportKind("history")}>Import history</button>}<button className="primary-button" onClick={downloadReport}>Download CSV</button></div></div>
+            <section className="filter-bar report-filters">
+              <label><span>From</span><input type="date" value={reportStart} onChange={(event) => setReportStart(event.target.value)} /></label>
+              <label><span>Through</span><input type="date" value={reportEnd} onChange={(event) => setReportEnd(event.target.value)} /></label>
+              <label><span>Employee</span><select value={reportEmployee} onChange={(event) => setReportEmployee(event.target.value)}><option value="all">All employees</option>{data.employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}</select></label>
+              <label><span>Department</span><select value={reportDepartment} onChange={(event) => setReportDepartment(event.target.value)}><option value="all">All departments</option>{data.departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select></label>
+              <label><span>Shift</span><select value={reportShift} onChange={(event) => setReportShift(event.target.value)}><option value="all">All shifts</option>{["Blue Day", "Blue Night", "Yellow Day", "Yellow Night"].map((shift) => <option key={shift}>{shift}</option>)}</select></label>
+              <label><span>Cost code</span><select value={reportCostCode} onChange={(event) => setReportCostCode(event.target.value)}><option value="all">All cost codes</option>{costCodes.map((code) => <option key={code}>{code}</option>)}</select></label>
+              <label><span>OT reason</span><select value={reportReason} onChange={(event) => setReportReason(event.target.value)}><option value="all">All reasons</option>{reasons.map((reason) => <option key={reason}>{reason}</option>)}</select></label>
+              <div><span>Included</span><strong>{filteredOt.length} OT · {filteredPto.length} PTO</strong></div>
+            </section>
+            <ReportTable overtime={filteredOt} pto={filteredPto} employeesById={employeesById} />
+            <OvertimeDetailTable entries={filteredOt} />
+          </>
+        )}
+
+        {tab === "settings" && isAdmin && (
+          <>
+            <div className="page-heading"><div><p className="eyebrow">Company configuration</p><h1>Departments & Cost Codes</h1><span>These defaults drive employee setup, overtime entry, and reporting.</span></div><button className="primary-button" onClick={() => setEditingDepartment({ id: "", name: "", defaultCostCode: "", active: true })}>+ Add department</button></div>
+            <section className="panel table-panel">{data.departments.length ? <div className="table-wrap"><table><thead><tr><th>Department</th><th>Default cost code</th><th>Active employees</th><th>Status</th><th /></tr></thead><tbody>{data.departments.map((department) => { const count = activeEmployees.filter((employee) => employee.departmentId === department.id).length; return <tr key={department.id} className={!department.active ? "inactive-row" : ""}><td><strong>{department.name}</strong></td><td><span className="code-pill">{department.defaultCostCode}</span></td><td>{count}</td><td><span className={`status-pill ${department.active ? "active" : "inactive"}`}>{department.active ? "Active" : "Inactive"}</span></td><td><button className="text-button" onClick={() => setEditingDepartment(department)}>Edit</button></td></tr>; })}</tbody></table></div> : <EmptyState title="No departments configured" body="Add the first company department and its default cost code." />}</section>
+            <section className="security-strip"><div className="lock-mark">✓</div><div><strong>History-safe setup</strong><span>Departments are deactivated instead of deleted. Existing overtime keeps the employee, shift, and department values that were true when it was entered.</span></div></section>
           </>
         )}
 
         {tab === "admin" && isAdmin && (
           <>
-            <div className="page-heading"><div><p className="eyebrow">Protected settings</p><h1>Administration</h1><span>Approve users, assign roles, and review recent changes.</span></div></div>
-            <section className="two-column admin-columns"><div className="panel"><div className="panel-head"><div><p className="eyebrow">User access</p><h2>Approved accounts</h2></div></div><div className="profile-list">{data.profiles.map((profile) => <div key={profile.email}><span className="avatar">{profile.fullName.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div><strong>{profile.fullName}</strong><small>{profile.email}</small></div><span className="role-pill">{profile.role}</span></div>)}</div><details className="add-user"><summary>+ Add or update a user</summary><form onSubmit={async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const ok = await mutate({ action: "upsert_profile", fullName: form.get("fullName"), email: form.get("email"), role: form.get("role"), active: true }, "User access saved."); if (ok) event.currentTarget.reset(); }}><label><span>Full name</span><input name="fullName" required /></label><label><span>Email</span><input type="email" name="email" required /></label><label><span>Role</span><select name="role" defaultValue="supervisor"><option value="supervisor">Supervisor</option><option value="viewer">Viewer</option><option value="admin">Admin</option></select></label><button className="primary-button" disabled={busy}>Save user</button></form></details></div>
-              <div className="panel"><div className="panel-head"><div><p className="eyebrow">Audit history</p><h2>Recent changes</h2></div></div><div className="audit-list">{data.auditLog.length ? data.auditLog.slice(0, 15).map((item) => <div key={item.id}><span className="audit-dot" /><div><strong>{item.action} {item.entityType.replace("_", " ")}</strong><small>{item.userEmail} · {timestampDate(item.createdAt).toLocaleString()}</small></div></div>) : <EmptyState title="No changes yet" body="Administrative and entry changes will be recorded here." />}</div></div>
+            <div className="page-heading"><div><p className="eyebrow">Protected access</p><h1>Administration</h1><span>Approve users, assign roles, and review recent changes.</span></div></div>
+            <section className="two-column admin-columns">
+              <div className="panel"><div className="panel-head"><div><p className="eyebrow">User access</p><h2>Approved accounts</h2></div></div><div className="profile-list">{data.profiles.map((profile) => <div key={profile.email}><span className="avatar">{initials(profile.fullName)}</span><div><strong>{profile.fullName}</strong><small>{profile.email}</small></div><span className="role-pill">{profile.role}</span><span className={`status-pill ${profile.active ? "active" : "inactive"}`}>{profile.active ? "Active" : "Inactive"}</span></div>)}</div><details className="add-user"><summary>+ Add or update a user</summary><form onSubmit={async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const ok = await mutate({ action: "upsert_profile", fullName: form.get("fullName"), email: form.get("email"), role: form.get("role"), active: form.get("active") === "on" }, "User access saved."); if (ok) event.currentTarget.reset(); }}><label><span>Full name</span><input name="fullName" required /></label><label><span>Email</span><input type="email" name="email" required /></label><label><span>Role</span><select name="role" defaultValue="supervisor"><option value="supervisor">Supervisor</option><option value="viewer">Viewer</option><option value="admin">Admin</option></select></label><label className="checkbox-label"><input type="checkbox" name="active" defaultChecked /><span>Active account</span></label><button className="primary-button" disabled={busy}>Save user</button></form></details></div>
+              <div className="panel"><div className="panel-head"><div><p className="eyebrow">Audit history</p><h2>Recent changes</h2></div></div><div className="audit-list">{data.auditLog.length ? data.auditLog.slice(0, 20).map((item) => <div key={item.id}><span className="audit-dot" /><div><strong>{item.action} {item.entityType.replaceAll("_", " ")}</strong><small>{item.userEmail} · {timestampDate(item.createdAt).toLocaleString()}</small></div></div>) : <EmptyState title="No changes yet" body="Administrative and entry changes will be recorded here." />}</div></div>
             </section>
-            <section className="security-strip"><div className="lock-mark">✓</div><div><strong>Private pilot protections</strong><span>Supabase login, approved user roles, database-enforced shift validation, and a tamper-resistant audit history are enabled.</span></div></section>
+            <section className="security-strip"><div className="lock-mark">✓</div><div><strong>Company pilot protections</strong><span>Supabase login, approved roles, forced row-level security, database validation, historical snapshots, and tamper-resistant audit history are enabled.</span></div></section>
           </>
         )}
       </main>
 
-      {otEmployee && <Modal title="Add overtime" onClose={() => setOtEmployee(null)}><EntryForm employee={otEmployee} date={selectedDate} type="ot" busy={busy} onSubmit={async (values) => { const ok = await mutate({ action: "add_overtime", employeeId: otEmployee.id, workDate: selectedDate, ...values }, "Overtime entry saved."); if (ok) setOtEmployee(null); }} /></Modal>}
-      {ptoEmployee && <Modal title="Add PTO" onClose={() => setPtoEmployee(null)}><EntryForm employee={ptoEmployee} date={selectedDate} type="pto" busy={busy} onSubmit={async (values) => { const ok = await mutate({ action: "add_pto", employeeId: ptoEmployee.id, ptoDate: selectedDate, ...values }, "PTO entry saved."); if (ok) setPtoEmployee(null); }} /></Modal>}
+      {overtimeEditor && <Modal title={overtimeEditor.entry ? "Edit overtime" : "Add overtime"} onClose={() => setOvertimeEditor(null)}><OvertimeForm employee={overtimeEditor.employee} entry={overtimeEditor.entry} date={selectedDate} departments={data.departments} busy={busy} onSubmit={async (values) => { const action = overtimeEditor.entry ? "update_overtime" : "add_overtime"; const ok = await mutate({ action, id: overtimeEditor.entry?.id, employeeId: overtimeEditor.employee.id, workDate: selectedDate, ...values }, overtimeEditor.entry ? "Overtime entry updated." : "Overtime entry saved."); if (ok) setOvertimeEditor(null); }} onDelete={overtimeEditor.entry ? async () => { const ok = await mutate({ action: "delete_overtime", id: overtimeEditor.entry?.id }, "Overtime entry removed."); if (ok) setOvertimeEditor(null); } : undefined} /></Modal>}
+      {ptoEmployee && <Modal title="Add PTO" onClose={() => setPtoEmployee(null)}><PtoForm employee={ptoEmployee} date={selectedDate} busy={busy} onSubmit={async (values) => { const ok = await mutate({ action: "add_pto", employeeId: ptoEmployee.id, ptoDate: selectedDate, ...values }, "PTO entry saved."); if (ok) setPtoEmployee(null); }} /></Modal>}
       {overrideDate && <Modal title="Correct scheduled shift" onClose={() => setOverrideDate(null)}><OverrideForm date={overrideDate} current={shiftForDate(overrideDate, data.scheduleOverrides)} override={data.scheduleOverrides.find((item) => item.workDate === overrideDate)} busy={busy} onSave={async (values) => { const ok = await mutate({ action: "set_override", workDate: overrideDate, ...values }, "Schedule correction saved."); if (ok) setOverrideDate(null); }} onRemove={async () => { const ok = await mutate({ action: "delete_override", workDate: overrideDate }, "Schedule correction removed."); if (ok) setOverrideDate(null); }} /></Modal>}
-      {editingEmployee && <Modal title={editingEmployee.id ? "Edit employee" : "Add employee"} onClose={() => setEditingEmployee(null)}><EmployeeForm employee={editingEmployee} busy={busy} onSave={async (values) => { const ok = await mutate({ action: editingEmployee.id ? "update_employee" : "add_employee", id: editingEmployee.id, ...values }, editingEmployee.id ? "Employee updated." : "Employee added."); if (ok) setEditingEmployee(null); }} /></Modal>}
+      {editingEmployee && <Modal title={editingEmployee.id ? "Edit employee" : "Add employee"} onClose={() => setEditingEmployee(null)}><EmployeeForm employee={editingEmployee} departments={data.departments} busy={busy} onSave={async (values) => { const ok = await mutate({ action: editingEmployee.id ? "update_employee" : "add_employee", id: editingEmployee.id, ...values }, editingEmployee.id ? "Employee updated." : "Employee added."); if (ok) setEditingEmployee(null); }} /></Modal>}
+      {editingDepartment && <Modal title={editingDepartment.id ? "Edit department" : "Add department"} onClose={() => setEditingDepartment(null)}><DepartmentForm department={editingDepartment} activeEmployeeCount={activeEmployees.filter((employee) => employee.departmentId === editingDepartment.id).length} busy={busy} onSave={async (values) => { const ok = await mutate({ action: editingDepartment.id ? "update_department" : "add_department", id: editingDepartment.id, ...values }, editingDepartment.id ? "Department updated." : "Department added."); if (ok) setEditingDepartment(null); }} /></Modal>}
       {importKind && <Modal title={importKind === "employees" ? "Import employee roster" : "Import overtime & PTO history"} onClose={() => setImportKind(null)}><ImportForm kind={importKind} busy={busy} onImport={async (rows) => { const ok = await mutate({ action: importKind === "employees" ? "import_employees" : "import_history", rows }, importKind === "employees" ? "Employee roster imported." : "Historical records imported."); if (ok) setImportKind(null); }} /></Modal>}
     </div>
   );
 }
 
-function EntryForm({ employee, date, type, busy, onSubmit }: { employee: Employee; date: string; type: "ot" | "pto"; busy: boolean; onSubmit: (values: Record<string, unknown>) => Promise<void> }) {
-  return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); void onSubmit(type === "ot" ? { hours: form.get("hours"), costCode: form.get("costCode"), notes: form.get("notes") } : { hours: form.get("hours"), ptoType: form.get("ptoType"), notes: form.get("notes") }); }}><div className="form-summary"><span className="avatar large">{employee.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div><strong>{employee.name}</strong><span>{prettyDate(date)} · {employee.shiftColor} {employee.shiftPeriod}</span></div></div><div className="form-grid"><label><span>Hours</span><input name="hours" type="number" min="0.25" max="24" step="0.25" defaultValue="12" required /></label>{type === "ot" ? <label><span>Cost code</span><input name="costCode" placeholder="Example: EXTR-OT" required /></label> : <label><span>PTO type</span><select name="ptoType" defaultValue="Vacation"><option>Vacation</option><option>Sick</option><option>Personal</option><option>Bereavement</option><option>Other</option></select></label>}</div><label><span>Notes <em>optional</em></span><textarea name="notes" rows={3} placeholder="Add any useful context" /></label><button className="primary-button full" disabled={busy}>{busy ? "Saving…" : type === "ot" ? "Save overtime" : "Save PTO"}</button></form>;
+function RosterFilters({ departments, department, setDepartment, search, setSearch }: { departments: Department[]; department: string; setDepartment: (value: string) => void; search: string; setSearch: (value: string) => void }) {
+  return <section className="filter-bar roster-filters"><label><span>Department</span><select value={department} onChange={(event) => setDepartment(event.target.value)}><option value="all">All departments</option>{departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="search-field"><span>Find employee</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name" /></label></section>;
 }
 
-function EmployeeForm({ employee, busy, onSave }: { employee: Employee; busy: boolean; onSave: (values: Record<string, unknown>) => Promise<void> }) {
-  return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); void onSave({ name: form.get("name"), department: form.get("department"), shiftColor: form.get("shiftColor"), shiftPeriod: form.get("shiftPeriod"), active: form.get("active") === "on" }); }}><label><span>Employee name</span><input name="name" defaultValue={employee.name} required autoFocus /></label><label><span>Department</span><input name="department" defaultValue={employee.department} required /></label><div className="form-grid"><label><span>Shift color</span><select name="shiftColor" defaultValue={employee.shiftColor}><option>Blue</option><option>Yellow</option></select></label><label><span>Shift period</span><select name="shiftPeriod" defaultValue={employee.shiftPeriod}><option>Day</option><option>Night</option></select></label></div><label className="checkbox-label"><input type="checkbox" name="active" defaultChecked={employee.active} /><span>Active employee</span></label><button className="primary-button full" disabled={busy}>{busy ? "Saving…" : "Save employee"}</button></form>;
+function OvertimeForm({ employee, entry, date, departments, busy, onSubmit, onDelete }: { employee: Employee; entry?: OvertimeEntry; date: string; departments: Department[]; busy: boolean; onSubmit: (values: Record<string, unknown>) => Promise<void>; onDelete?: () => Promise<void> }) {
+  const selectable = departments.filter((department) => department.active || department.id === entry?.departmentId);
+  const initialDepartment = selectable.find((department) => department.id === entry?.departmentId) ?? selectable.find((department) => department.id === employee.departmentId) ?? selectable[0];
+  const [hours, setHours] = useState(entry?.hours ?? 12);
+  const [departmentId, setDepartmentId] = useState(initialDepartment?.id ?? "");
+  const [costCode, setCostCode] = useState(entry?.costCode ?? initialDepartment?.defaultCostCode ?? "");
+  const [reason, setReason] = useState(entry?.reason ?? "Production Needs");
+  const historicalReason = entry?.reason && !OT_REASONS.includes(entry.reason as (typeof OT_REASONS)[number]) ? entry.reason : "";
+
+  return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); void onSubmit({ hours, departmentId, costCode, reason, notes: form.get("notes") }); }}><div className="form-summary"><span className="avatar large">{initials(employee.name)}</span><div><strong>{employee.name}</strong><span>{prettyDate(date)} · {employee.shiftColor} {employee.shiftPeriod} · Home: {employee.department}</span></div></div><label><span>Quick hours</span><div className="quick-hours">{[2, 4, 8, 12].map((value) => <button type="button" key={value} className={hours === value ? "active" : ""} onClick={() => setHours(value)}>+{value}</button>)}</div></label><div className="form-grid"><label><span>Hours</span><input name="hours" type="number" min="0.25" max="24" step="0.25" value={hours} onChange={(event) => setHours(Number(event.target.value))} required /></label><label><span>Working department</span><select name="departmentId" value={departmentId} onChange={(event) => { const next = selectable.find((department) => department.id === event.target.value); setDepartmentId(event.target.value); if (next) setCostCode(next.defaultCostCode); }} required>{selectable.map((department) => <option key={department.id} value={department.id}>{department.name}{department.active ? "" : " (inactive)"}</option>)}</select></label></div><div className="form-grid"><label><span>Cost code</span><input name="costCode" value={costCode} onChange={(event) => setCostCode(event.target.value.toUpperCase())} placeholder="Example: EXT-100" required /></label><label><span>Reason</span><select name="reason" value={reason} onChange={(event) => setReason(event.target.value)} required>{historicalReason && <option>{historicalReason}</option>}{OT_REASONS.map((item) => <option key={item}>{item}</option>)}</select></label></div><label><span>Notes <em>optional</em></span><textarea name="notes" rows={3} defaultValue={entry?.notes} placeholder="Add any useful context" /></label><div className="button-row">{onDelete && <button type="button" className="danger-button" disabled={busy} onClick={() => void onDelete()}>Remove entry</button>}<button className="primary-button" disabled={busy || !departmentId}>{busy ? "Saving…" : entry ? "Update overtime" : "Save overtime"}</button></div></form>;
+}
+
+function PtoForm({ employee, date, busy, onSubmit }: { employee: Employee; date: string; busy: boolean; onSubmit: (values: Record<string, unknown>) => Promise<void> }) {
+  return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); void onSubmit({ hours: form.get("hours"), ptoType: form.get("ptoType"), notes: form.get("notes") }); }}><div className="form-summary"><span className="avatar large">{initials(employee.name)}</span><div><strong>{employee.name}</strong><span>{prettyDate(date)} · {employee.department} · {employee.shiftColor} {employee.shiftPeriod}</span></div></div><div className="form-grid"><label><span>Hours</span><input name="hours" type="number" min="0.25" max="24" step="0.25" defaultValue="12" required /></label><label><span>PTO type</span><select name="ptoType" defaultValue="Vacation"><option>Vacation</option><option>Sick</option><option>Personal</option><option>Bereavement</option><option>Other</option></select></label></div><label><span>Notes <em>optional</em></span><textarea name="notes" rows={3} placeholder="Add any useful context" /></label><button className="primary-button full" disabled={busy}>{busy ? "Saving…" : "Save PTO"}</button></form>;
+}
+
+function EmployeeForm({ employee, departments, busy, onSave }: { employee: Employee; departments: Department[]; busy: boolean; onSave: (values: Record<string, unknown>) => Promise<void> }) {
+  const selectable = departments.filter((department) => department.active || department.id === employee.departmentId);
+  return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); void onSave({ name: form.get("name"), departmentId: form.get("departmentId"), shiftColor: form.get("shiftColor"), shiftPeriod: form.get("shiftPeriod"), active: form.get("active") === "on" }); }}><label><span>Employee name</span><input name="name" defaultValue={employee.name} required autoFocus /></label><label><span>Department</span><select name="departmentId" defaultValue={employee.departmentId} required>{selectable.map((department) => <option key={department.id} value={department.id}>{department.name}{department.active ? "" : " (inactive)"}</option>)}</select></label><div className="form-grid"><label><span>Shift color</span><select name="shiftColor" defaultValue={employee.shiftColor}><option>Blue</option><option>Yellow</option></select></label><label><span>Shift period</span><select name="shiftPeriod" defaultValue={employee.shiftPeriod}><option>Day</option><option>Night</option></select></label></div><label className="checkbox-label"><input type="checkbox" name="active" defaultChecked={employee.active} /><span>Active employee</span></label><button className="primary-button full" disabled={busy || !selectable.length}>{busy ? "Saving…" : "Save employee"}</button></form>;
+}
+
+function DepartmentForm({ department, activeEmployeeCount, busy, onSave }: { department: Department; activeEmployeeCount: number; busy: boolean; onSave: (values: Record<string, unknown>) => Promise<void> }) {
+  return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const active = activeEmployeeCount > 0 && department.active ? true : form.get("active") === "on"; void onSave({ name: form.get("name"), defaultCostCode: form.get("defaultCostCode"), active }); }}><p className="modal-copy">The default cost code fills automatically when this department is selected for overtime. Supervisors can still enter a different code when needed.</p><label><span>Department name</span><input name="name" defaultValue={department.name} maxLength={100} required autoFocus /></label><label><span>Default cost code</span><input name="defaultCostCode" defaultValue={department.defaultCostCode} maxLength={50} placeholder="Example: EXT-100" required /></label><label className="checkbox-label"><input type="checkbox" name="active" defaultChecked={department.active} disabled={activeEmployeeCount > 0 && department.active} /><span>Active department{activeEmployeeCount > 0 && department.active ? ` · ${activeEmployeeCount} active employees must be moved or deactivated first` : ""}</span></label><div className="privacy-note"><strong>Historical records are protected</strong><span>Renaming this department updates current employee assignments. Existing overtime keeps its original department snapshot.</span></div><button className="primary-button full" disabled={busy}>{busy ? "Saving…" : "Save department"}</button></form>;
 }
 
 function normalizeDateValue(value: string) {
@@ -337,9 +406,7 @@ function parseCsv(text: string) {
       row.push(field.trim()); field = "";
       if (row.some(Boolean)) rows.push(row);
       row = [];
-    } else {
-      field += character;
-    }
+    } else field += character;
   }
   row.push(field.trim());
   if (row.some(Boolean)) rows.push(row);
@@ -350,8 +417,8 @@ function parseCsv(text: string) {
 
 function downloadImportTemplate(kind: ImportKind) {
   const csv = kind === "employees"
-    ? "name,shift_color,shift_period,department,active\nEmployee One,Blue,Day,Extrusion,true\nEmployee Two,Yellow,Night,Extrusion,true\n"
-    : "type,date,employee_name,hours,code_or_type,notes\nOT,2026-06-15,Employee One,12,EXTR-OT,Weekend coverage\nPTO,2026-07-02,Employee One,12,Vacation,Approved vacation\n";
+    ? "name,shift_color,shift_period,department,active\nEmployee One,Blue,Day,Extrusion,true\nEmployee Two,Yellow,Night,Warehouse,true\n"
+    : "type,date,employee_name,hours,department,code_or_type,reason,notes\nOT,2026-06-15,Employee One,12,Extrusion,EXT-100,Production Needs,Weekend coverage\nPTO,2026-07-02,Employee One,12,,Vacation,,Approved vacation\n";
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -372,37 +439,33 @@ function ImportForm({ kind, busy, onImport }: { kind: ImportKind; busy: boolean;
     try {
       const parsed = parseCsv(await file.text());
       const rows = employeeImport
-        ? parsed.map((row) => ({
-            name: row.name,
-            shiftColor: row.shift_color?.toLowerCase() === "yellow" ? "Yellow" : row.shift_color?.toLowerCase() === "blue" ? "Blue" : row.shift_color,
-            shiftPeriod: row.shift_period?.toLowerCase() === "night" ? "Night" : row.shift_period?.toLowerCase() === "day" ? "Day" : row.shift_period,
-            department: row.department || "Extrusion",
-            active: !["false", "no", "0", "inactive"].includes((row.active || "true").toLowerCase()),
-          }))
-        : parsed.map((row) => ({
-            type: row.type?.toUpperCase(),
-            date: normalizeDateValue(row.date || ""),
-            employeeName: row.employee_name,
-            hours: row.hours,
-            codeOrType: row.code_or_type,
-            notes: row.notes || "",
-          }));
+        ? parsed.map((row) => ({ name: row.name, shiftColor: row.shift_color?.toLowerCase() === "yellow" ? "Yellow" : row.shift_color?.toLowerCase() === "blue" ? "Blue" : row.shift_color, shiftPeriod: row.shift_period?.toLowerCase() === "night" ? "Night" : row.shift_period?.toLowerCase() === "day" ? "Day" : row.shift_period, department: row.department, active: !["false", "no", "0", "inactive"].includes((row.active || "true").toLowerCase()) }))
+        : parsed.map((row) => ({ type: row.type?.toUpperCase(), date: normalizeDateValue(row.date || ""), employeeName: row.employee_name, hours: row.hours, department: row.department || "", codeOrType: row.code_or_type, reason: row.reason || "", notes: row.notes || "" }));
       setFileError("");
       await onImport(rows);
-    } catch (error) {
-      setFileError(error instanceof Error ? error.message : "The CSV could not be read.");
+    } catch (importError) {
+      setFileError(importError instanceof Error ? importError.message : "The CSV could not be read.");
     }
   }
 
-  return <form className="modal-form import-form" onSubmit={(event) => void submit(event)}><p className="modal-copy">{employeeImport ? "Start with the employee roster. Existing employees with the same name will be updated instead of duplicated." : "Import overtime and PTO together after the employee roster is loaded. Employee names must match the roster exactly."}</p><div className="template-box"><div><strong>Use the import template</strong><span>{employeeImport ? "Columns: name, shift_color, shift_period, department, active" : "Columns: type, date, employee_name, hours, code_or_type, notes"}</span></div><button type="button" className="secondary-button" onClick={() => downloadImportTemplate(kind)}>Download template</button></div><label className="file-picker"><span>Completed CSV file</span><input type="file" accept=".csv,text/csv" onChange={(event) => { setFile(event.target.files?.[0] ?? null); setFileError(""); }} /></label>{fileError && <div className="field-error">{fileError}</div>}<div className="privacy-note"><strong>Company data reminder</strong><span>Only import real employee or PTO information after your company has approved this private pilot.</span></div><button className="primary-button full" disabled={busy || !file}>{busy ? "Importing…" : employeeImport ? "Import employees" : "Import historical records"}</button></form>;
+  return <form className="modal-form import-form" onSubmit={(event) => void submit(event)}><p className="modal-copy">{employeeImport ? "Department names must already exist in Company Setup. Existing employees with the same name are updated instead of duplicated." : "Import overtime and PTO after the roster is loaded. Employee and department names must match exactly; duplicate OT is skipped by employee, date, department, and cost code."}</p><div className="template-box"><div><strong>Use the import template</strong><span>{employeeImport ? "Columns: name, shift_color, shift_period, department, active" : "Columns: type, date, employee_name, hours, department, code_or_type, reason, notes"}</span></div><button type="button" className="secondary-button" onClick={() => downloadImportTemplate(kind)}>Download template</button></div><label className="file-picker"><span>Completed CSV file</span><input type="file" accept=".csv,text/csv" onChange={(event) => { setFile(event.target.files?.[0] ?? null); setFileError(""); }} /></label>{fileError && <div className="field-error">{fileError}</div>}<div className="privacy-note"><strong>Company data reminder</strong><span>Only import real employee or PTO information after your company has approved this private pilot.</span></div><button className="primary-button full" disabled={busy || !file}>{busy ? "Importing…" : employeeImport ? "Import employees" : "Import historical records"}</button></form>;
 }
 
 function OverrideForm({ date, current, override, busy, onSave, onRemove }: { date: string; current: ShiftColor; override?: Override; busy: boolean; onSave: (values: Record<string, unknown>) => Promise<void>; onRemove: () => Promise<void> }) {
   return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); void onSave({ shiftColor: form.get("shiftColor"), reason: form.get("reason") }); }}><p className="modal-copy">Change the working color for <strong>{prettyDate(date)}</strong>. Overtime availability will update immediately.</p><label><span>Working color</span><select name="shiftColor" defaultValue={current}><option>Blue</option><option>Yellow</option></select></label><label><span>Reason</span><textarea name="reason" rows={3} defaultValue={override?.reason} placeholder="Calendar correction, holiday adjustment, etc." /></label><div className="button-row">{override && <button type="button" className="danger-button" disabled={busy} onClick={() => void onRemove()}>Remove correction</button>}<button className="primary-button" disabled={busy}>Save correction</button></div></form>;
 }
 
-function EntryTable({ title, entries, canDelete, onDelete }: { title: string; entries: Array<{ id: string; name: string; detail: string; hours: number; notes: string }>; canDelete: boolean; onDelete: (id: string) => void }) {
-  return <section className="panel table-panel"><div className="panel-head padded"><h2>{title}</h2><span className="subtle-count">{entries.length} entries</span></div>{entries.length ? <div className="table-wrap"><table><thead><tr><th>Employee</th><th>Type / code</th><th>Hours</th><th>Notes</th>{canDelete && <th />}</tr></thead><tbody>{entries.map((entry) => <tr key={entry.id}><td><strong>{entry.name}</strong></td><td>{entry.detail}</td><td>{entry.hours}</td><td className="notes-cell">{entry.notes || "—"}</td>{canDelete && <td><button className="delete-link" onClick={() => onDelete(entry.id)}>Remove</button></td>}</tr>)}</tbody></table></div> : <EmptyState title="Nothing entered for this date" body="Use the employee roster above to add an entry." />}</section>;
+function EntryTable({ title, entries, canChange, onEdit, onDelete }: { title: string; entries: Array<{ id: string; name: string; detail: string; subdetail?: string; hours: number; notes: string }>; canChange: boolean; onEdit?: (id: string) => void; onDelete: (id: string) => void }) {
+  return <section className="panel table-panel"><div className="panel-head padded"><h2>{title}</h2><span className="subtle-count">{entries.length} entries · {entries.reduce((sum, entry) => sum + entry.hours, 0).toFixed(1)} hrs</span></div>{entries.length ? <div className="table-wrap"><table><thead><tr><th>Employee</th><th>Department / code</th><th>Reason / type</th><th>Hours</th><th>Notes</th>{canChange && <th />}</tr></thead><tbody>{entries.map((entry) => <tr key={entry.id}><td><strong>{entry.name}</strong></td><td>{entry.detail}</td><td>{entry.subdetail || "—"}</td><td>{entry.hours}</td><td className="notes-cell">{entry.notes || "—"}</td>{canChange && <td><div className="row-actions">{onEdit && <button className="text-button" onClick={() => onEdit(entry.id)}>Edit</button>}<button className="delete-link" onClick={() => onDelete(entry.id)}>Remove</button></div></td>}</tr>)}</tbody></table></div> : <EmptyState title="Nothing entered for this date" body="Use the employee roster above to add an entry." />}</section>;
+}
+
+function DepartmentBreakdown({ totals }: { totals: Array<[string, number]> }) {
+  const max = Math.max(...totals.map(([, hours]) => hours), 1);
+  return totals.length ? <div className="department-breakdown">{totals.map(([name, hours]) => <div key={name}><div><strong>{name}</strong><span>{hours.toFixed(1)} hrs</span></div><i><b style={{ width: `${(hours / max) * 100}%` }} /></i></div>)}</div> : <EmptyState title="No department overtime yet" body="Monthly department totals will appear after overtime is entered." />;
+}
+
+function WeekOverview({ dates, selectedDate, setSelectedDate, entries, overrides }: { dates: string[]; selectedDate: string; setSelectedDate: (value: string) => void; entries: OvertimeEntry[]; overrides: Override[] }) {
+  return <section className="week-overview" aria-label="Overtime week">{dates.map((date) => { const daily = entries.filter((entry) => entry.workDate === date); const color = shiftForDate(date, overrides); return <button key={date} className={`${date === selectedDate ? "active" : ""} ${color.toLowerCase()}`} onClick={() => setSelectedDate(date)}><span>{dateFromInput(date).toLocaleDateString("en-US", { weekday: "short" })}</span><strong>{dateFromInput(date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</strong><small>{color} working</small><b>{daily.reduce((sum, entry) => sum + entry.hours, 0).toFixed(1)} hrs · {daily.length} entries</b></button>; })}</section>;
 }
 
 function CalendarView({ monthValue, setMonthValue, overrides, isAdmin, onSelect }: { monthValue: string; setMonthValue: (value: string) => void; overrides: Override[]; isAdmin: boolean; onSelect: (date: string) => void }) {
@@ -412,15 +475,24 @@ function CalendarView({ monthValue, setMonthValue, overrides, isAdmin, onSelect 
   const days = Array.from({ length: 42 }, (_, index) => { const date = new Date(gridStart); date.setDate(gridStart.getDate() + index); return date; });
   const title = first.toLocaleDateString("en-US", { month: "long", year: "numeric" });
   function moveMonth(amount: number) { setMonthValue(toDateInput(new Date(first.getFullYear(), first.getMonth() + amount, 1))); }
-  return <><div className="page-heading"><div><p className="eyebrow">Automatic rotation</p><h1>Shift Calendar</h1><span>Verified 2-2-3 Yellow and Blue schedule. Admin corrections are marked.</span></div><div className="month-controls"><button onClick={() => moveMonth(-1)}>‹</button><strong>{title}</strong><button onClick={() => moveMonth(1)}>›</button></div></div><section className="calendar-panel"><div className="weekday-row">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{days.map((date) => { const dateValue = toDateInput(date); const color = shiftForDate(dateValue, overrides); const override = overrides.find((item) => item.workDate === dateValue); const outside = date.getMonth() !== first.getMonth(); return <button key={dateValue} className={`calendar-day ${color.toLowerCase()} ${outside ? "outside" : ""}`} onClick={() => isAdmin && onSelect(dateValue)} disabled={!isAdmin}><span>{date.getDate()}</span><ShiftBadge color={color} compact />{override && <em title={override.reason || "Admin correction"}>Corrected</em>}</button>; })}</div></section><div className="calendar-legend"><ShiftBadge color="Blue" /><span>Blue Day & Night working</span><ShiftBadge color="Yellow" /><span>Yellow Day & Night working</span>{isAdmin && <small>Click a date to correct its scheduled color.</small>}</div></>;
+  return <><div className="page-heading"><div><p className="eyebrow">Automatic rotation</p><h1>Shift Calendar</h1><span>Verified 2-2-3 Yellow and Blue schedule. Admin corrections are marked.</span></div><div className="month-controls"><button onClick={() => moveMonth(-1)}>‹</button><strong>{title}</strong><button onClick={() => moveMonth(1)}>›</button></div></div><section className="calendar-panel"><div className="weekday-row">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{days.map((date) => { const dateValue = toDateInput(date); const color = shiftForDate(dateValue, overrides); const savedOverride = overrides.find((item) => item.workDate === dateValue); const outside = date.getMonth() !== first.getMonth(); return <button key={dateValue} className={`calendar-day ${color.toLowerCase()} ${outside ? "outside" : ""}`} onClick={() => isAdmin && onSelect(dateValue)} disabled={!isAdmin}><span>{date.getDate()}</span><ShiftBadge color={color} compact />{savedOverride && <em title={savedOverride.reason || "Admin correction"}>Corrected</em>}</button>; })}</div></section><div className="calendar-legend"><ShiftBadge color="Blue" /><span>Blue Day & Night working</span><ShiftBadge color="Yellow" /><span>Yellow Day & Night working</span>{isAdmin && <small>Click a date to correct its scheduled color.</small>}</div></>;
 }
 
-function ReportTable({ data, employeesById, start, end }: { data: Bundle; employeesById: Map<string, Employee>; start: string; end: string }) {
-  const rows = data.employees.map((employee) => {
-    const ot = data.overtimeEntries.filter((entry) => entry.employeeId === employee.id && entry.workDate >= start && entry.workDate <= end);
-    const pto = data.ptoEntries.filter((entry) => entry.employeeId === employee.id && entry.ptoDate >= start && entry.ptoDate <= end);
-    return { employee, otHours: ot.reduce((sum, entry) => sum + entry.hours, 0), otCount: ot.length, ptoHours: pto.reduce((sum, entry) => sum + entry.hours, 0), ptoCount: pto.length };
-  }).filter((row) => row.otCount || row.ptoCount || row.employee.active).sort((a, b) => b.otHours - a.otHours);
-  void employeesById;
-  return <section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>Employee</th><th>Shift</th><th>OT hours</th><th>OT entries</th><th>PTO hours</th><th>PTO entries</th></tr></thead><tbody>{rows.map((row) => <tr key={row.employee.id}><td><strong>{row.employee.name}</strong></td><td><ShiftBadge color={row.employee.shiftColor} compact /> {row.employee.shiftPeriod}</td><td><strong>{row.otHours.toFixed(1)}</strong></td><td>{row.otCount}</td><td>{row.ptoHours.toFixed(1)}</td><td>{row.ptoCount}</td></tr>)}</tbody><tfoot><tr><td colSpan={2}>Totals</td><td>{rows.reduce((sum, row) => sum + row.otHours, 0).toFixed(1)}</td><td>{rows.reduce((sum, row) => sum + row.otCount, 0)}</td><td>{rows.reduce((sum, row) => sum + row.ptoHours, 0).toFixed(1)}</td><td>{rows.reduce((sum, row) => sum + row.ptoCount, 0)}</td></tr></tfoot></table></div></section>;
+function ReportTable({ overtime, pto, employeesById }: { overtime: OvertimeEntry[]; pto: PtoEntry[]; employeesById: Map<string, Employee> }) {
+  const rows = new Map<string, { id: string; name: string; department: string; shift: string; otHours: number; otCount: number; ptoHours: number; ptoCount: number }>();
+  for (const entry of overtime) {
+    const current = rows.get(entry.employeeId) ?? { id: entry.employeeId, name: entry.employeeName, department: entry.departmentName, shift: entry.shiftName, otHours: 0, otCount: 0, ptoHours: 0, ptoCount: 0 };
+    current.otHours += entry.hours; current.otCount += 1; rows.set(entry.employeeId, current);
+  }
+  for (const entry of pto) {
+    const employee = employeesById.get(entry.employeeId);
+    const current = rows.get(entry.employeeId) ?? { id: entry.employeeId, name: employee?.name || "Unknown", department: employee?.department || "Unknown", shift: employee ? `${employee.shiftColor} ${employee.shiftPeriod}` : "Unknown", otHours: 0, otCount: 0, ptoHours: 0, ptoCount: 0 };
+    current.ptoHours += entry.hours; current.ptoCount += 1; rows.set(entry.employeeId, current);
+  }
+  const sorted = Array.from(rows.values()).sort((a, b) => b.otHours - a.otHours || a.name.localeCompare(b.name));
+  return <section className="panel table-panel"><div className="panel-head padded"><div><p className="eyebrow">Summary</p><h2>Hours by employee</h2></div></div>{sorted.length ? <div className="table-wrap"><table><thead><tr><th>Employee</th><th>Department</th><th>Shift</th><th>OT hours</th><th>OT entries</th><th>PTO hours</th><th>PTO entries</th></tr></thead><tbody>{sorted.map((row) => <tr key={row.id}><td><strong>{row.name}</strong></td><td>{row.department}</td><td>{row.shift}</td><td><strong>{row.otHours.toFixed(1)}</strong></td><td>{row.otCount}</td><td>{row.ptoHours.toFixed(1)}</td><td>{row.ptoCount}</td></tr>)}</tbody><tfoot><tr><td colSpan={3}>Totals</td><td>{sorted.reduce((sum, row) => sum + row.otHours, 0).toFixed(1)}</td><td>{sorted.reduce((sum, row) => sum + row.otCount, 0)}</td><td>{sorted.reduce((sum, row) => sum + row.ptoHours, 0).toFixed(1)}</td><td>{sorted.reduce((sum, row) => sum + row.ptoCount, 0)}</td></tr></tfoot></table></div> : <EmptyState title="No records match" body="Adjust the report filters to include more activity." />}</section>;
+}
+
+function OvertimeDetailTable({ entries }: { entries: OvertimeEntry[] }) {
+  return <section className="panel table-panel"><div className="panel-head padded"><div><p className="eyebrow">Detail</p><h2>Overtime records</h2></div><span className="subtle-count">{entries.length} records</span></div>{entries.length ? <div className="table-wrap"><table><thead><tr><th>Date</th><th>Employee</th><th>Department</th><th>Shift</th><th>Cost code</th><th>Reason</th><th>Hours</th><th>Notes</th></tr></thead><tbody>{entries.map((entry) => <tr key={entry.id}><td>{prettyDate(entry.workDate, true)}</td><td><strong>{entry.employeeName}</strong></td><td>{entry.departmentName}</td><td>{entry.shiftName}</td><td>{entry.costCode}</td><td>{entry.reason}</td><td><strong>{entry.hours.toFixed(1)}</strong></td><td className="notes-cell">{entry.notes || "—"}</td></tr>)}</tbody></table></div> : <EmptyState title="No overtime matches" body="Department, cost code, reason, and date filters apply here." />}</section>;
 }

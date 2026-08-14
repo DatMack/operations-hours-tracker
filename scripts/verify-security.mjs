@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
-const [client, html, migration, privateHelpersMigration, deployWorkflow] = await Promise.all([
+const [client, html, baseMigration, migration, privateHelpersMigration, companyMigration, deployWorkflow] = await Promise.all([
   read("src/lib/supabase.ts"),
   read("index.html"),
+  read("supabase/migrations/20260814000000_operations_hours_tracker.sql"),
   read("supabase/migrations/20260814010000_github_pages_auth_rls.sql"),
   read("supabase/migrations/20260814020000_private_rls_helpers.sql"),
+  read("supabase/migrations/20260814030000_company_departments.sql"),
   read(".github/workflows/deploy-pages.yml"),
 ]);
 
@@ -17,6 +19,7 @@ assert.match(html, /object-src 'none'/, "The CSP must block plugin/object conten
 assert.match(html, /connect-src[^\"]*ydiinfqmgecemwdpidrb\.supabase\.co/, "The CSP must restrict API connections to the selected Supabase project");
 
 for (const table of ["profiles", "employees", "overtime_entries", "pto_entries", "schedule_overrides", "audit_log", "app_settings"]) {
+  assert.match(baseMigration, new RegExp(`create table if not exists public\\.${table}`, "i"), `${table} must be defined by the repository's base migration`);
   assert.match(migration, new RegExp(`alter table public\\.${table} force row level security`, "i"), `${table} must force RLS`);
   assert.match(migration, new RegExp(`revoke all on table public\\.${table} from anon`, "i"), `${table} must reject anonymous access`);
 }
@@ -29,6 +32,19 @@ for (const helper of ["current_user_email", "current_user_role", "tracker_is_app
   assert.match(privateHelpersMigration, new RegExp(`alter function public\\.${helper}\\(\\) set schema private`, "i"), `${helper} must be removed from the API-exposed public schema`);
   assert.match(privateHelpersMigration, new RegExp(`revoke all on function private\\.${helper}\\(\\) from public, anon`, "i"), `${helper} must reject anonymous execution`);
 }
+assert.match(companyMigration, /create table if not exists public\.departments/i, "Departments must be stored as protected configuration records");
+assert.match(companyMigration, /alter table public\.departments force row level security/i, "Departments must force RLS");
+assert.match(companyMigration, /revoke all on table public\.departments from anon, authenticated/i, "Departments must reject anonymous access");
+assert.match(companyMigration, /departments_admin_(?:insert|update)/i, "Department changes must require administrator policies");
+assert.doesNotMatch(companyMigration, /grant[^;]*delete[^;]*public\.departments[^;]*authenticated/i, "Browser users must not hard-delete departments");
+assert.match(companyMigration, /department_name_snapshot/i, "Overtime must preserve historical department names");
+assert.match(companyMigration, /employee_name_snapshot/i, "Overtime must preserve historical employee names");
+assert.match(companyMigration, /shift_name_snapshot/i, "Overtime must preserve historical shift names");
+assert.match(companyMigration, /overtime_writer_update/i, "Supervisors must have an RLS-controlled overtime edit policy");
+assert.match(companyMigration, /overtime_company_fields_guard/i, "Database triggers must validate company overtime fields");
+assert.match(companyMigration, /already exists for this employee, date, department, and cost code/i, "Duplicate overtime must be blocked in PostgreSQL");
+assert.match(companyMigration, /overtime_quarter_hour_check/i, "Quarter-hour increments must be enforced in PostgreSQL");
+assert.match(companyMigration, /audit_departments_change/i, "Department changes must be audited");
 assert.match(deployWorkflow, /contents: read/, "The deployment workflow must use read-only repository access");
 assert.match(deployWorkflow, /pages: write/, "The deployment workflow may write only to Pages");
 
