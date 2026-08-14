@@ -106,6 +106,8 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
   const [importKind, setImportKind] = useState<ImportKind | null>(null);
   const [rosterSearch, setRosterSearch] = useState("");
   const [rosterDepartment, setRosterDepartment] = useState("all");
+  const [rosterPeriod, setRosterPeriod] = useState("all");
+  const [assignmentDefaultsApplied, setAssignmentDefaultsApplied] = useState(false);
   const [reportStart, setReportStart] = useState(() => `${new Date().getFullYear()}-01-01`);
   const [reportEnd, setReportEnd] = useState(() => `${new Date().getFullYear()}-12-31`);
   const [reportEmployee, setReportEmployee] = useState("all");
@@ -132,6 +134,14 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
       });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!assignmentDefaultsApplied && data?.session.role === "supervisor") {
+      if (data.session.departmentId) setRosterDepartment(data.session.departmentId);
+      if (data.session.shiftPeriod) setRosterPeriod(data.session.shiftPeriod);
+      setAssignmentDefaultsApplied(true);
+    }
+  }, [assignmentDefaultsApplied, data]);
 
   async function mutate(payload: Record<string, unknown>, success: string) {
     setBusy(true);
@@ -177,8 +187,9 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
   const selectedPto = data.ptoEntries.filter((entry) => entry.ptoDate === selectedDate);
   const rosterEmployees = activeEmployees.filter((employee) => {
     const matchesDepartment = rosterDepartment === "all" || employee.departmentId === rosterDepartment;
+    const matchesPeriod = rosterPeriod === "all" || employee.shiftPeriod === rosterPeriod;
     const query = rosterSearch.trim().toLowerCase();
-    return matchesDepartment && (!query || employee.name.toLowerCase().includes(query));
+    return matchesDepartment && matchesPeriod && (!query || employee.name.toLowerCase().includes(query));
   });
   const costCodes = Array.from(new Set(data.overtimeEntries.map((entry) => entry.costCode))).sort();
   const reasons = Array.from(new Set(data.overtimeEntries.map((entry) => entry.reason))).sort();
@@ -236,7 +247,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
     <div className="app-shell">
       <header className="topbar">
         <div className="brand"><div className="brand-box">OT</div><div><strong>Overtime & PTO</strong><span>Company operations tracker · Supabase</span></div></div>
-        <div className="account"><span className="status-dot" /><div><strong>{data.session.fullName}</strong><span>{data.session.role}</span></div><button className="signout-button" onClick={() => void onSignOut()}>Sign out</button></div>
+        <div className="account"><span className="status-dot" /><div><strong>{data.session.fullName}</strong><span>{data.session.role}{data.session.role === "supervisor" ? ` · ${data.departments.find((department) => department.id === data.session.departmentId)?.name ?? "Unassigned"} · ${data.session.shiftPeriod ?? "Unassigned"}` : ""}</span></div><button className="signout-button" onClick={() => void onSignOut()}>Sign out</button></div>
       </header>
 
       <nav className="main-nav" aria-label="Tracker pages">
@@ -277,7 +288,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
             <div className="page-heading"><div><p className="eyebrow">Company-wide supervisor entry</p><h1>Overtime Entry</h1><span>Choose the employee, working department, cost code, reason, and hours.</span></div><label className="date-control"><span>Overtime date</span><input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label></div>
             <WeekOverview dates={weekDates(selectedDate)} selectedDate={selectedDate} setSelectedDate={setSelectedDate} entries={data.overtimeEntries} overrides={data.scheduleOverrides} />
             <div className="schedule-banner"><div><ShiftBadge color={workingColor} /><strong>{workingColor} is working {prettyDate(selectedDate)}</strong></div><span>Employees on {workingColor} shift show “Working” and cannot be added.</span></div>
-            <RosterFilters departments={activeDepartments} department={rosterDepartment} setDepartment={setRosterDepartment} search={rosterSearch} setSearch={setRosterSearch} />
+            <RosterFilters departments={activeDepartments} department={rosterDepartment} setDepartment={setRosterDepartment} period={rosterPeriod} setPeriod={setRosterPeriod} search={rosterSearch} setSearch={setRosterSearch} />
             <section className="panel"><div className="panel-head"><div><p className="eyebrow">Available roster</p><h2>Select an employee</h2></div><span className="subtle-count">{rosterEmployees.filter((employee) => employee.shiftColor !== workingColor).length} available · {rosterEmployees.length} shown</span></div>
               {rosterEmployees.length ? <div className="roster-grid">{rosterEmployees.map((employee) => { const scheduled = employee.shiftColor === workingColor; return <article className={`employee-card ${scheduled ? "scheduled" : ""}`} key={employee.id}><div className="employee-main"><span className="avatar large">{initials(employee.name)}</span><div><strong>{employee.name}</strong><span>{employee.department}</span><span><ShiftBadge color={employee.shiftColor} compact /> {employee.shiftPeriod}</span></div></div>{scheduled ? <span className="working-pill">Working</span> : <button className="add-button" disabled={!canWrite} onClick={() => setOvertimeEditor({ employee })} aria-label={`Add overtime for ${employee.name}`}>+</button>}</article>; })}</div> : <EmptyState title="No employees match" body="Clear the search or choose another department." />}
             </section>
@@ -288,7 +299,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
         {tab === "pto" && (
           <>
             <div className="page-heading"><div><p className="eyebrow">Company time-off log</p><h1>PTO Tracking</h1><span>Record vacation, sick, personal, or other approved time.</span></div><label className="date-control"><span>PTO date</span><input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label></div>
-            <RosterFilters departments={activeDepartments} department={rosterDepartment} setDepartment={setRosterDepartment} search={rosterSearch} setSearch={setRosterSearch} />
+            <RosterFilters departments={activeDepartments} department={rosterDepartment} setDepartment={setRosterDepartment} period={rosterPeriod} setPeriod={setRosterPeriod} search={rosterSearch} setSearch={setRosterSearch} />
             <section className="panel"><div className="panel-head"><div><p className="eyebrow">Employee roster</p><h2>Select an employee</h2></div><span className="subtle-count">{rosterEmployees.length} shown</span></div>{rosterEmployees.length ? <div className="roster-grid">{rosterEmployees.map((employee) => <article className="employee-card" key={employee.id}><div className="employee-main"><span className="avatar large">{initials(employee.name)}</span><div><strong>{employee.name}</strong><span>{employee.department}</span><span><ShiftBadge color={employee.shiftColor} compact /> {employee.shiftPeriod}</span></div></div><button className="add-button" disabled={!canWrite} onClick={() => setPtoEmployee(employee)} aria-label={`Add PTO for ${employee.name}`}>+</button></article>)}</div> : <EmptyState title="No employees match" body="Clear the search or choose another department." />}</section>
             <EntryTable title={`PTO for ${prettyDate(selectedDate)}`} entries={selectedPto.map((entry) => ({ id: entry.id, name: employeesById.get(entry.employeeId)?.name || "Unknown", detail: employeesById.get(entry.employeeId)?.department || "No department", subdetail: entry.ptoType, hours: entry.hours, notes: entry.notes }))} canChange={Boolean(canWrite)} onDelete={(id) => void mutate({ action: "delete_pto", id }, "PTO entry removed.")} />
           </>
@@ -334,7 +345,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
           <>
             <div className="page-heading"><div><p className="eyebrow">Protected access</p><h1>Administration</h1><span>Approve users, assign roles, and review recent changes.</span></div></div>
             <section className="two-column admin-columns">
-              <div className="panel"><div className="panel-head"><div><p className="eyebrow">User access</p><h2>Approved accounts</h2></div></div><div className="profile-list">{data.profiles.map((profile) => <div key={profile.email}><span className="avatar">{initials(profile.fullName)}</span><div><strong>{profile.fullName}</strong><small>{profile.email}</small></div><span className="role-pill">{profile.role}</span><span className={`status-pill ${profile.active ? "active" : "inactive"}`}>{profile.active ? "Active" : "Inactive"}</span></div>)}</div><details className="add-user"><summary>+ Add or update a user</summary><form onSubmit={async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const ok = await mutate({ action: "upsert_profile", fullName: form.get("fullName"), email: form.get("email"), role: form.get("role"), active: form.get("active") === "on" }, "User access saved."); if (ok) event.currentTarget.reset(); }}><label><span>Full name</span><input name="fullName" required /></label><label><span>Email</span><input type="email" name="email" required /></label><label><span>Role</span><select name="role" defaultValue="supervisor"><option value="supervisor">Supervisor</option><option value="viewer">Viewer</option><option value="admin">Admin</option></select></label><label className="checkbox-label"><input type="checkbox" name="active" defaultChecked /><span>Active account</span></label><button className="primary-button" disabled={busy}>Save user</button></form></details></div>
+              <div className="panel"><div className="panel-head"><div><p className="eyebrow">User access</p><h2>Approved accounts</h2></div></div><div className="profile-list">{data.profiles.map((profile) => <div key={profile.email}><span className="avatar">{initials(profile.fullName)}</span><div><strong>{profile.fullName}</strong><small>{profile.email}{profile.role === "supervisor" ? ` · ${data.departments.find((department) => department.id === profile.departmentId)?.name ?? "Unassigned"} · ${profile.shiftPeriod ?? "Unassigned"}` : ""}</small></div><span className="role-pill">{profile.role}</span><span className={`status-pill ${profile.active ? "active" : "inactive"}`}>{profile.active ? "Active" : "Inactive"}</span></div>)}</div><details className="add-user"><summary>+ Add or update a user</summary><form onSubmit={async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const ok = await mutate({ action: "upsert_profile", fullName: form.get("fullName"), email: form.get("email"), role: form.get("role"), departmentId: form.get("departmentId"), shiftPeriod: form.get("shiftPeriod"), active: form.get("active") === "on" }, "User access saved."); if (ok) event.currentTarget.reset(); }}><label><span>Full name</span><input name="fullName" required /></label><label><span>Email</span><input type="email" name="email" required /></label><label><span>Role</span><select name="role" defaultValue="supervisor"><option value="supervisor">Supervisor</option><option value="viewer">Viewer</option><option value="admin">Admin</option></select></label><div className="form-grid"><label><span>Supervisor department</span><select name="departmentId" defaultValue={activeDepartments[0]?.id}>{activeDepartments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select></label><label><span>Supervisor period</span><select name="shiftPeriod" defaultValue="Day"><option>Day</option><option>Night</option></select></label></div><small className="form-help">Department and period are used when the role is Supervisor.</small><label className="checkbox-label"><input type="checkbox" name="active" defaultChecked /><span>Active account</span></label><button className="primary-button" disabled={busy}>Save user</button></form></details></div>
               <div className="panel"><div className="panel-head"><div><p className="eyebrow">Audit history</p><h2>Recent changes</h2></div></div><div className="audit-list">{data.auditLog.length ? data.auditLog.slice(0, 20).map((item) => <div key={item.id}><span className="audit-dot" /><div><strong>{item.action} {item.entityType.replaceAll("_", " ")}</strong><small>{item.userEmail} · {timestampDate(item.createdAt).toLocaleString()}</small></div></div>) : <EmptyState title="No changes yet" body="Administrative and entry changes will be recorded here." />}</div></div>
             </section>
             <section className="security-strip"><div className="lock-mark">✓</div><div><strong>Company pilot protections</strong><span>Supabase login, approved roles, forced row-level security, database validation, historical snapshots, and tamper-resistant audit history are enabled.</span></div></section>
@@ -352,8 +363,8 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
   );
 }
 
-function RosterFilters({ departments, department, setDepartment, search, setSearch }: { departments: Department[]; department: string; setDepartment: (value: string) => void; search: string; setSearch: (value: string) => void }) {
-  return <section className="filter-bar roster-filters"><label><span>Department</span><select value={department} onChange={(event) => setDepartment(event.target.value)}><option value="all">All departments</option>{departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="search-field"><span>Find employee</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name" /></label></section>;
+function RosterFilters({ departments, department, setDepartment, period, setPeriod, search, setSearch }: { departments: Department[]; department: string; setDepartment: (value: string) => void; period: string; setPeriod: (value: string) => void; search: string; setSearch: (value: string) => void }) {
+  return <section className="filter-bar roster-filters"><label><span>Department</span><select value={department} onChange={(event) => setDepartment(event.target.value)}><option value="all">All departments</option>{departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>Shift period</span><select value={period} onChange={(event) => setPeriod(event.target.value)}><option value="all">Day & Night</option><option>Day</option><option>Night</option></select></label><label className="search-field"><span>Find employee</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name" /></label></section>;
 }
 
 function OvertimeForm({ employee, entry, date, departments, busy, onSubmit, onDelete }: { employee: Employee; entry?: OvertimeEntry; date: string; departments: Department[]; busy: boolean; onSubmit: (values: Record<string, unknown>) => Promise<void>; onDelete?: () => Promise<void> }) {
