@@ -2,13 +2,25 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { baseShiftForDate, type ShiftColor } from "./schedule";
 import { supabase } from "./supabase";
 
+export const OT_REASONS = [
+  "Call-Off Coverage",
+  "Production Needs",
+  "Training",
+  "Maintenance",
+  "Staffing Shortage",
+  "Project Work",
+  "Other",
+] as const;
+
 export type Role = "admin" | "supervisor" | "viewer";
 export type Profile = { email: string; fullName: string; role: Role; active: boolean; createdAt?: string };
+export type Department = { id: string; name: string; defaultCostCode: string; active: boolean; createdAt?: string; updatedAt?: string };
 export type Employee = {
   id: string;
   name: string;
   shiftColor: ShiftColor;
   shiftPeriod: "Day" | "Night";
+  departmentId: string;
   department: string;
   active: boolean;
   createdAt?: string;
@@ -17,27 +29,24 @@ export type OvertimeEntry = {
   id: string;
   workDate: string;
   employeeId: string;
+  departmentId: string;
+  departmentName: string;
+  employeeName: string;
+  shiftName: string;
   hours: number;
   costCode: string;
+  reason: string;
   notes: string;
   enteredBy: string;
   createdAt: string;
 };
-export type PtoEntry = {
-  id: string;
-  ptoDate: string;
-  employeeId: string;
-  hours: number;
-  ptoType: string;
-  notes: string;
-  enteredBy: string;
-  createdAt: string;
-};
+export type PtoEntry = { id: string; ptoDate: string; employeeId: string; hours: number; ptoType: string; notes: string; enteredBy: string; createdAt: string };
 export type Override = { workDate: string; shiftColor: ShiftColor; reason: string; updatedBy: string; updatedAt?: string };
 export type Audit = { id: string; action: string; entityType: string; details: string; userEmail: string; createdAt: string };
 export type TrackerBundle = {
   backend: "supabase";
   session: Profile;
+  departments: Department[];
   employees: Employee[];
   overtimeEntries: OvertimeEntry[];
   ptoEntries: PtoEntry[];
@@ -48,8 +57,23 @@ export type TrackerBundle = {
 
 type DbError = { message: string } | null;
 type ProfileRow = { email: string; full_name: string; role: Role; active: boolean; created_at: string };
-type EmployeeRow = { id: string; name: string; shift_color: ShiftColor; shift_period: "Day" | "Night"; department: string; active: boolean; created_at: string };
-type OvertimeRow = { id: string; work_date: string; employee_id: string; hours: number | string; cost_code: string; notes: string; entered_by: string; created_at: string };
+type DepartmentRow = { id: string; name: string; default_cost_code: string; active: boolean; created_at: string; updated_at: string };
+type EmployeeRow = { id: string; name: string; shift_color: ShiftColor; shift_period: "Day" | "Night"; department_id: string; department: string; active: boolean; created_at: string };
+type OvertimeRow = {
+  id: string;
+  work_date: string;
+  employee_id: string;
+  department_id: string;
+  department_name_snapshot: string;
+  employee_name_snapshot: string;
+  shift_name_snapshot: string;
+  hours: number | string;
+  cost_code: string;
+  reason: string;
+  notes: string;
+  entered_by: string;
+  created_at: string;
+};
 type PtoRow = { id: string; pto_date: string; employee_id: string; hours: number | string; pto_type: string; notes: string; entered_by: string; created_at: string };
 type OverrideRow = { work_date: string; shift_color: ShiftColor; reason: string; updated_by: string; updated_at: string };
 type AuditRow = { id: string; action: string; entity_type: string; entity_id: string; details: unknown; user_email: string; created_at: string };
@@ -69,7 +93,8 @@ function validColor(value: unknown): value is ShiftColor {
 function asHours(value: unknown) {
   const hours = Number(value);
   if (!Number.isFinite(hours) || hours <= 0 || hours > 24) throw new Error("Hours must be between 0 and 24.");
-  return Math.round(hours * 100) / 100;
+  if (Math.abs(hours * 4 - Math.round(hours * 4)) > 0.0001) throw new Error("Hours must use quarter-hour increments.");
+  return Math.round(hours * 4) / 4;
 }
 
 function textValue(value: unknown, max = 250) {
@@ -88,12 +113,30 @@ function profile(row: ProfileRow): Profile {
   return { email: row.email, fullName: row.full_name, role: row.role, active: row.active, createdAt: row.created_at };
 }
 
+function department(row: DepartmentRow): Department {
+  return { id: row.id, name: row.name, defaultCostCode: row.default_cost_code, active: row.active, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
 function employee(row: EmployeeRow): Employee {
-  return { id: row.id, name: row.name, shiftColor: row.shift_color, shiftPeriod: row.shift_period, department: row.department, active: row.active, createdAt: row.created_at };
+  return { id: row.id, name: row.name, shiftColor: row.shift_color, shiftPeriod: row.shift_period, departmentId: row.department_id, department: row.department, active: row.active, createdAt: row.created_at };
 }
 
 function overtime(row: OvertimeRow): OvertimeEntry {
-  return { id: row.id, workDate: row.work_date, employeeId: row.employee_id, hours: Number(row.hours), costCode: row.cost_code, notes: row.notes, enteredBy: row.entered_by, createdAt: row.created_at };
+  return {
+    id: row.id,
+    workDate: row.work_date,
+    employeeId: row.employee_id,
+    departmentId: row.department_id,
+    departmentName: row.department_name_snapshot,
+    employeeName: row.employee_name_snapshot,
+    shiftName: row.shift_name_snapshot,
+    hours: Number(row.hours),
+    costCode: row.cost_code,
+    reason: row.reason,
+    notes: row.notes,
+    enteredBy: row.entered_by,
+    createdAt: row.created_at,
+  };
 }
 
 function pto(row: PtoRow): PtoEntry {
@@ -121,19 +164,53 @@ async function currentProfile(db: SupabaseClient): Promise<Profile> {
   return profile(row);
 }
 
+async function departmentRows() {
+  const result = await supabase.from("departments").select("*").order("active", { ascending: false }).order("name");
+  check(result.error, "load departments");
+  return (result.data ?? []) as unknown as DepartmentRow[];
+}
+
+async function allEntryRows(table: "overtime_entries" | "pto_entries", dateColumn: "work_date" | "pto_date") {
+  const rows: unknown[] = [];
+  const pageSize = 1000;
+  for (let start = 0; ; start += pageSize) {
+    const result = await supabase.from(table).select("*").order(dateColumn, { ascending: false }).order("created_at", { ascending: false }).range(start, start + pageSize - 1);
+    check(result.error, `load ${table.replaceAll("_", " ")}`);
+    const page = result.data ?? [];
+    rows.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return rows;
+}
+
+function selectedDepartment(rows: DepartmentRow[], idValue: unknown, nameValue?: unknown) {
+  const id = textValue(idValue, 80);
+  const name = textValue(nameValue, 100).toLowerCase();
+  const match = rows.find((item) => item.id === id) ?? rows.find((item) => item.name.trim().toLowerCase() === name);
+  if (!match) throw new Error("Select a configured department.");
+  return match;
+}
+
+function validReason(value: unknown, fallback = "") {
+  const reason = textValue(value, 100) || fallback;
+  const allowed: readonly string[] = [...OT_REASONS, "Historical entry", "Historical import"];
+  if (!allowed.includes(reason)) throw new Error("Select a valid overtime reason.");
+  return reason;
+}
+
 export async function loadBundle(): Promise<TrackerBundle> {
   const session = await currentProfile(supabase);
-  const [employeeResult, overtimeResult, ptoResult, overrideResult, profileResult, auditResult] = await Promise.all([
+  const [departmentResult, employeeResult, overtimeRows, ptoRows, overrideResult, profileResult, auditResult] = await Promise.all([
+    supabase.from("departments").select("*").order("active", { ascending: false }).order("name"),
     supabase.from("employees").select("*").order("shift_color").order("shift_period").order("name"),
-    supabase.from("overtime_entries").select("*").order("work_date", { ascending: false }).order("created_at", { ascending: false }).limit(1000),
-    supabase.from("pto_entries").select("*").order("pto_date", { ascending: false }).order("created_at", { ascending: false }).limit(1000),
+    allEntryRows("overtime_entries", "work_date"),
+    allEntryRows("pto_entries", "pto_date"),
     supabase.from("schedule_overrides").select("*").order("work_date", { ascending: false }),
     session.role === "admin" ? supabase.from("profiles").select("*").order("full_name") : Promise.resolve({ data: [], error: null }),
     session.role === "admin" ? supabase.from("audit_log").select("*").order("created_at", { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
   ]);
+  check(departmentResult.error, "load departments");
   check(employeeResult.error, "load employees");
-  check(overtimeResult.error, "load overtime");
-  check(ptoResult.error, "load PTO");
   check(overrideResult.error, "load schedule corrections");
   check(profileResult.error, "load approved users");
   check(auditResult.error, "load audit history");
@@ -141,9 +218,10 @@ export async function loadBundle(): Promise<TrackerBundle> {
   return {
     backend: "supabase",
     session,
+    departments: ((departmentResult.data ?? []) as unknown as DepartmentRow[]).map(department),
     employees: ((employeeResult.data ?? []) as unknown as EmployeeRow[]).map(employee),
-    overtimeEntries: ((overtimeResult.data ?? []) as unknown as OvertimeRow[]).map(overtime),
-    ptoEntries: ((ptoResult.data ?? []) as unknown as PtoRow[]).map(pto),
+    overtimeEntries: (overtimeRows as OvertimeRow[]).map(overtime),
+    ptoEntries: (ptoRows as PtoRow[]).map(pto),
     scheduleOverrides: ((overrideResult.data ?? []) as unknown as OverrideRow[]).map(override),
     profiles: ((profileResult.data ?? []) as unknown as ProfileRow[]).map(profile),
     auditLog: ((auditResult.data ?? []) as unknown as AuditRow[]).map(audit),
@@ -154,33 +232,48 @@ export async function mutateTracker(payload: Record<string, unknown>): Promise<T
   const action = textValue(payload.action, 50);
   const session = await currentProfile(supabase);
 
-  if (action === "add_employee") {
+  if (action === "add_department" || action === "update_department") {
+    requireAdmin(session.role);
+    const name = textValue(payload.name, 100);
+    const defaultCostCode = textValue(payload.defaultCostCode, 50).toUpperCase();
+    if (!name || !defaultCostCode) throw new Error("Department name and default cost code are required.");
+    if (action === "add_department") {
+      const result = await supabase.from("departments").insert({ id: crypto.randomUUID(), name, default_cost_code: defaultCostCode, active: true });
+      check(result.error, "add the department");
+    } else {
+      const id = textValue(payload.id, 80);
+      if (!id) throw new Error("Select a department to update.");
+      const result = await supabase.from("departments").update({ name, default_cost_code: defaultCostCode, active: payload.active !== false }).eq("id", id);
+      check(result.error, "update the department");
+    }
+  } else if (action === "add_employee") {
     requireAdmin(session.role);
     const name = textValue(payload.name, 100);
     const shiftColor = payload.shiftColor;
     const shiftPeriod = payload.shiftPeriod;
-    if (!name || !validColor(shiftColor) || (shiftPeriod !== "Day" && shiftPeriod !== "Night")) throw new Error("Name, shift color, and shift period are required.");
-    const result = await supabase.from("employees").insert({
-      id: crypto.randomUUID(), name, shift_color: shiftColor, shift_period: shiftPeriod,
-      department: textValue(payload.department, 100) || "Extrusion", active: true,
-    });
+    const selected = selectedDepartment(await departmentRows(), payload.departmentId, payload.department);
+    if (!name || !validColor(shiftColor) || (shiftPeriod !== "Day" && shiftPeriod !== "Night")) throw new Error("Name, department, shift color, and shift period are required.");
+    if (!selected.active) throw new Error("Select an active department.");
+    const result = await supabase.from("employees").insert({ id: crypto.randomUUID(), name, shift_color: shiftColor, shift_period: shiftPeriod, department_id: selected.id, department: selected.name, active: true });
     check(result.error, "add the employee");
   } else if (action === "import_employees") {
     requireAdmin(session.role);
-    const rows = Array.isArray(payload.rows) ? payload.rows.slice(0, 250) : [];
+    const rows = Array.isArray(payload.rows) ? payload.rows.slice(0, 1000) : [];
     if (!rows.length) throw new Error("At least one employee row is required.");
-    const currentResult = await supabase.from("employees").select("*");
+    const [currentResult, departments] = await Promise.all([supabase.from("employees").select("*"), departmentRows()]);
     check(currentResult.error, "load employees for import");
     const current = (currentResult.data ?? []) as unknown as EmployeeRow[];
     const byName = new Map(current.map((item) => [item.name.trim().toLowerCase(), item]));
-    const normalized = new Map<string, { name: string; shift_color: ShiftColor; shift_period: "Day" | "Night"; department: string; active: boolean }>();
+    const normalized = new Map<string, Record<string, unknown>>();
     for (let index = 0; index < rows.length; index += 1) {
       const source = rows[index] as Record<string, unknown>;
       const name = textValue(source.name, 100);
       const shiftColor = source.shiftColor;
       const shiftPeriod = source.shiftPeriod;
-      if (!name || !validColor(shiftColor) || (shiftPeriod !== "Day" && shiftPeriod !== "Night")) throw new Error(`Employee import row ${index + 2} needs a valid name, shift color, and shift period.`);
-      normalized.set(name.toLowerCase(), { name, shift_color: shiftColor, shift_period: shiftPeriod, department: textValue(source.department, 100) || "Extrusion", active: source.active !== false });
+      const selected = selectedDepartment(departments, source.departmentId, source.department);
+      if (!name || !validColor(shiftColor) || (shiftPeriod !== "Day" && shiftPeriod !== "Night")) throw new Error(`Employee import row ${index + 2} needs a valid name, department, shift color, and shift period.`);
+      if (!selected.active) throw new Error(`Employee import row ${index + 2} uses an inactive department.`);
+      normalized.set(name.toLowerCase(), { name, shift_color: shiftColor, shift_period: shiftPeriod, department_id: selected.id, department: selected.name, active: source.active !== false });
     }
     const inserts: Array<Record<string, unknown>> = [];
     for (const [nameKey, values] of normalized) {
@@ -190,8 +283,8 @@ export async function mutateTracker(payload: Record<string, unknown>): Promise<T
         check(result.error, "update an imported employee");
       } else inserts.push({ id: crypto.randomUUID(), ...values });
     }
-    if (inserts.length) {
-      const result = await supabase.from("employees").insert(inserts);
+    for (let index = 0; index < inserts.length; index += 100) {
+      const result = await supabase.from("employees").insert(inserts.slice(index, index + 100));
       check(result.error, "import new employees");
     }
   } else if (action === "update_employee") {
@@ -200,15 +293,20 @@ export async function mutateTracker(payload: Record<string, unknown>): Promise<T
     const name = textValue(payload.name, 100);
     const shiftColor = payload.shiftColor;
     const shiftPeriod = payload.shiftPeriod;
+    const selected = selectedDepartment(await departmentRows(), payload.departmentId, payload.department);
     if (!id || !name || !validColor(shiftColor) || (shiftPeriod !== "Day" && shiftPeriod !== "Night")) throw new Error("Valid employee information is required.");
-    const result = await supabase.from("employees").update({ name, shift_color: shiftColor, shift_period: shiftPeriod, department: textValue(payload.department, 100) || "Extrusion", active: Boolean(payload.active) }).eq("id", id);
+    if (!selected.active) throw new Error("Select an active department.");
+    const result = await supabase.from("employees").update({ name, shift_color: shiftColor, shift_period: shiftPeriod, department_id: selected.id, department: selected.name, active: Boolean(payload.active) }).eq("id", id);
     check(result.error, "update the employee");
   } else if (action === "add_overtime") {
     requireWrite(session.role);
     const employeeId = textValue(payload.employeeId, 80);
     const workDate = payload.workDate;
-    const costCode = textValue(payload.costCode, 50);
-    if (!employeeId || !validDate(workDate) || !costCode) throw new Error("Employee, date, and cost code are required.");
+    const costCode = textValue(payload.costCode, 50).toUpperCase();
+    const reason = validReason(payload.reason);
+    const selected = selectedDepartment(await departmentRows(), payload.departmentId);
+    if (!employeeId || !validDate(workDate) || !costCode || !reason) throw new Error("Employee, date, department, cost code, and reason are required.");
+    if (!selected.active) throw new Error("Select an active department.");
     const [employeeResult, overrideResult] = await Promise.all([
       supabase.from("employees").select("*").eq("id", employeeId).maybeSingle(),
       supabase.from("schedule_overrides").select("*").eq("work_date", workDate).maybeSingle(),
@@ -220,8 +318,17 @@ export async function mutateTracker(payload: Record<string, unknown>): Promise<T
     if (!selectedEmployee?.active) throw new Error("Select an active employee.");
     const workingColor = scheduleOverride?.shift_color ?? baseShiftForDate(workDate);
     if (selectedEmployee.shift_color === workingColor) throw new Error(`${selectedEmployee.name} is already scheduled to work on ${workDate}.`);
-    const result = await supabase.from("overtime_entries").insert({ id: crypto.randomUUID(), employee_id: employeeId, work_date: workDate, hours: asHours(payload.hours), cost_code: costCode, notes: textValue(payload.notes, 500), entered_by: session.email });
+    const result = await supabase.from("overtime_entries").insert({ id: crypto.randomUUID(), employee_id: employeeId, work_date: workDate, department_id: selected.id, hours: asHours(payload.hours), cost_code: costCode, reason, notes: textValue(payload.notes, 500), entered_by: session.email });
     check(result.error, "add overtime");
+  } else if (action === "update_overtime") {
+    requireWrite(session.role);
+    const id = textValue(payload.id, 80);
+    const selected = selectedDepartment(await departmentRows(), payload.departmentId);
+    const costCode = textValue(payload.costCode, 50).toUpperCase();
+    const reason = validReason(payload.reason);
+    if (!id || !selected.active || !costCode || !reason) throw new Error("Valid overtime details are required.");
+    const result = await supabase.from("overtime_entries").update({ department_id: selected.id, hours: asHours(payload.hours), cost_code: costCode, reason, notes: textValue(payload.notes, 500) }).eq("id", id);
+    check(result.error, "update overtime");
   } else if (action === "delete_overtime") {
     requireWrite(session.role);
     const result = await supabase.from("overtime_entries").delete().eq("id", textValue(payload.id, 80));
@@ -236,23 +343,24 @@ export async function mutateTracker(payload: Record<string, unknown>): Promise<T
     check(result.error, "add PTO");
   } else if (action === "import_history") {
     requireAdmin(session.role);
-    const rows = Array.isArray(payload.rows) ? payload.rows.slice(0, 2500) : [];
+    const rows = Array.isArray(payload.rows) ? payload.rows.slice(0, 5000) : [];
     if (!rows.length) throw new Error("At least one historical row is required.");
-    const [employeeResult, overtimeResult, ptoResult, overrideResult] = await Promise.all([
-      supabase.from("employees").select("*"), supabase.from("overtime_entries").select("*"),
-      supabase.from("pto_entries").select("*"), supabase.from("schedule_overrides").select("*"),
+    const [employeeResult, overtimeRows, ptoRows, overrideResult, departments] = await Promise.all([
+      supabase.from("employees").select("*"),
+      allEntryRows("overtime_entries", "work_date"),
+      allEntryRows("pto_entries", "pto_date"),
+      supabase.from("schedule_overrides").select("*"),
+      departmentRows(),
     ]);
     check(employeeResult.error, "load employees for history import");
-    check(overtimeResult.error, "load overtime for history import");
-    check(ptoResult.error, "load PTO for history import");
     check(overrideResult.error, "load schedule corrections for history import");
     const employees = (employeeResult.data ?? []) as unknown as EmployeeRow[];
-    const overtimeRows = (overtimeResult.data ?? []) as unknown as OvertimeRow[];
-    const ptoRows = (ptoResult.data ?? []) as unknown as PtoRow[];
+    const currentOvertime = overtimeRows as OvertimeRow[];
+    const currentPto = ptoRows as PtoRow[];
     const overrideRows = (overrideResult.data ?? []) as unknown as OverrideRow[];
     const employeeByName = new Map(employees.map((item) => [item.name.trim().toLowerCase(), item]));
-    const overtimeKeys = new Set(overtimeRows.map((item) => `${item.employee_id}|${item.work_date}|${Number(item.hours)}|${item.cost_code.toLowerCase()}`));
-    const ptoKeys = new Set(ptoRows.map((item) => `${item.employee_id}|${item.pto_date}|${Number(item.hours)}|${item.pto_type.toLowerCase()}`));
+    const overtimeKeys = new Set(currentOvertime.map((item) => `${item.employee_id}|${item.work_date}|${item.department_id}|${item.cost_code.toLowerCase()}`));
+    const ptoKeys = new Set(currentPto.map((item) => `${item.employee_id}|${item.pto_date}|${Number(item.hours)}|${item.pto_type.toLowerCase()}`));
     const overrideByDate = new Map(overrideRows.map((item) => [item.work_date, item.shift_color]));
     const pendingOvertime: Array<Record<string, unknown>> = [];
     const pendingPto: Array<Record<string, unknown>> = [];
@@ -268,8 +376,14 @@ export async function mutateTracker(payload: Record<string, unknown>): Promise<T
       if (type === "OT") {
         const workingColor = overrideByDate.get(entryDate) ?? baseShiftForDate(entryDate);
         if (selectedEmployee.shift_color === workingColor) throw new Error(`History import row ${index + 2}: ${selectedEmployee.name} was already scheduled to work on ${entryDate}.`);
-        const key = `${selectedEmployee.id}|${entryDate}|${common.hours}|${codeOrType.toLowerCase()}`;
-        if (!overtimeKeys.has(key)) { overtimeKeys.add(key); pendingOvertime.push({ ...common, work_date: entryDate, cost_code: codeOrType }); }
+        const requestedDepartment = textValue(source.department, 100);
+        const selected = selectedDepartment(departments, requestedDepartment ? "" : source.departmentId ?? selectedEmployee.department_id, requestedDepartment);
+        const reason = validReason(source.reason, "Historical import");
+        const key = `${selectedEmployee.id}|${entryDate}|${selected.id}|${codeOrType.toLowerCase()}`;
+        if (!overtimeKeys.has(key)) {
+          overtimeKeys.add(key);
+          pendingOvertime.push({ ...common, work_date: entryDate, department_id: selected.id, cost_code: codeOrType.toUpperCase(), reason });
+        }
       } else {
         const key = `${selectedEmployee.id}|${entryDate}|${common.hours}|${codeOrType.toLowerCase()}`;
         if (!ptoKeys.has(key)) { ptoKeys.add(key); pendingPto.push({ ...common, pto_date: entryDate, pto_type: codeOrType }); }
