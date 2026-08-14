@@ -489,7 +489,19 @@ function DashboardWidgetView({ widget, data, selectedDate, workingColor, activeE
   if (widget.id === "kpi_employees") return <DashboardMetric widget={widget} label="Active employees" value={activeEmployees.length} detail={`${activeDepartments.length} active departments`} />;
   if (widget.id === "kpi_ot_people") return <DashboardMetric widget={widget} label="Employees with OT" value={new Set(monthOt.map((entry) => entry.employeeId)).size} detail={`${monthOt.length ? (otHours / monthOt.length).toFixed(1) : "0.0"} average hrs per entry`} />;
 
-  if (widget.id === "shift_today") return <article className={`dashboard-widget dashboard-shift ${workingColor.toLowerCase()} ${widget.size}`}><div><span className="hero-kicker">Scheduled on {prettyDate(selectedDate, true)}</span><h2>{workingColor} Shift</h2><p>Both {workingColor} Day and {workingColor} Night crews are scheduled on the regular 2-2-3 rotation.</p></div><div className="hero-count"><strong>{activeEmployees.filter((employee) => employee.shiftColor === workingColor).length}</strong><span>scheduled employees</span></div>{data.scheduleOverrides.some((item) => item.workDate === selectedDate) && <span className="override-flag">Admin corrected</span>}</article>;
+  if (widget.id === "shift_today") {
+    const scheduledEmployees = activeEmployees.filter((employee) => employee.shiftColor === workingColor);
+    const departmentSchedule = activeDepartments.map((department) => ({
+      name: department.name,
+      count: scheduledEmployees.filter((employee) => employee.departmentId === department.id).length,
+    })).filter((department) => department.count > 0);
+    return <article className={\`dashboard-widget dashboard-shift \${workingColor.toLowerCase()} \${widget.size}\`}>
+      <div><span className="hero-kicker">Scheduled on {prettyDate(selectedDate, true)}</span><h2>{workingColor} Shift</h2></div>
+      <div className="scheduled-departments"><span>Scheduled by department</span><div>{departmentSchedule.map((department) => <p key={department.name}><b>{department.name}</b><strong>{department.count}</strong></p>)}</div></div>
+      <div className="hero-count"><strong>{scheduledEmployees.length}</strong><span>scheduled employees</span></div>
+      {data.scheduleOverrides.some((item) => item.workDate === selectedDate) && <span className="override-flag">Admin corrected</span>}
+    </article>;
+  }
 
   if (widget.id === "schedule") return <DashboardPanel widget={widget} eyebrow="Looking ahead" title="Next 14 days" action={<button className="text-button" onClick={() => onNavigate("calendar")}>Full calendar →</button>}><div className="forecast-grid">{Array.from({ length: 14 }, (_, index) => addDays(selectedDate, index)).map((date) => { const color = shiftForDate(date, data.scheduleOverrides); return <div className={`forecast-day ${color.toLowerCase()}`} key={date}><span>{dateFromInput(date).toLocaleDateString("en-US", { weekday: "short" })}</span><strong>{dateFromInput(date).getDate()}</strong><ShiftBadge color={color} compact /></div>; })}</div></DashboardPanel>;
 
