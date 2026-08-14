@@ -201,8 +201,10 @@ tfoot td { background: #f4f7f8; color: var(--navy); font-weight: 900; }
 .filter-bar > div { padding: 0 10px 7px; display: flex; flex-direction: column; gap: 5px; }
 .filter-bar > div span { color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; }
 .filter-bar > div strong { color: var(--navy); font-size: 12px; }
-.roster-filters { max-width: 720px; }
+.roster-filters { max-width: 940px; }
 .roster-filters .search-field { min-width: 280px; flex: 1; }
+.employee-filters { display: grid; grid-template-columns: minmax(230px, 2fr) repeat(4, minmax(135px, 1fr)); align-items: end; }
+.employee-filters label { min-width: 0; }
 .report-filters { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); align-items: end; }
 .report-filters label { min-width: 0; }
 .report-filters > div { min-height: 42px; justify-content: center; border-left: 2px solid #dce7eb; }
@@ -283,6 +285,7 @@ tfoot td { background: #f4f7f8; color: var(--navy); font-weight: 900; }
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
   .roster-grid { grid-template-columns: repeat(2, 1fr); }
   .forecast-grid { grid-template-columns: repeat(14, 68px); }
+  .employee-filters { grid-template-columns: repeat(3, minmax(160px, 1fr)); }
   .report-filters { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
 }
 
@@ -309,6 +312,7 @@ tfoot td { background: #f4f7f8; color: var(--navy); font-weight: 900; }
   .calendar-legend small { width: 100%; margin-left: 0; }
   .filter-bar { align-items: stretch; flex-direction: column; }
   .filter-bar label { min-width: 0; }
+  .employee-filters { display: flex; }
   .report-filters { display: flex; }
   .report-filters > div { border-left: 0; border-top: 2px solid #dce7eb; }
   .roster-filters { max-width: none; }
