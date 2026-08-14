@@ -169,6 +169,10 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
   const [reportShift, setReportShift] = useState("all");
   const [reportCostCode, setReportCostCode] = useState("all");
   const [reportReason, setReportReason] = useState("all");
+  const [colorMode, setColorMode] = useState<ColorMode>(() => (localStorage.getItem("operations-hours-color-mode") as ColorMode) || "system");
+  const resolvedColorMode = colorMode === "system" ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : colorMode;
+
+  useEffect(() => { localStorage.setItem("operations-hours-color-mode", colorMode); }, [colorMode]);
 
   async function load() {
     try {
