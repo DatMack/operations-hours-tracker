@@ -102,11 +102,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--teal); box-shado
 .shift-badge.compact i { width: 6px; height: 6px; }
 
 .activity-list { padding: 10px 20px 16px; }
-.activity-list > div, .profile-list > div { padding: 11px 0; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #edf1f3; }
-.activity-list > div:last-child, .profile-list > div:last-child { border-bottom: 0; }
-.activity-list div > div, .profile-list div > div { min-width: 0; display: flex; flex: 1; flex-direction: column; gap: 3px; }
-.activity-list strong, .profile-list strong { font-size: 13px; }
-.activity-list small, .profile-list small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.activity-list > div { padding: 11px 0; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #edf1f3; }
+.activity-list > div:last-child { border-bottom: 0; }
+.activity-list div > div { min-width: 0; display: flex; flex: 1; flex-direction: column; gap: 3px; }
+.activity-list strong { font-size: 13px; }
+.activity-list small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
 .activity-list b { color: var(--navy); font-size: 13px; }
 .avatar { width: 34px; height: 34px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 9px; background: #e8eef2; color: var(--navy); font-size: 10px; font-weight: 900; }
 .avatar.large { width: 42px; height: 42px; font-size: 12px; }
@@ -219,12 +219,21 @@ tfoot td { background: #f4f7f8; color: var(--navy); font-weight: 900; }
 
 .admin-columns { align-items: start; }
 .profile-list { padding: 8px 20px; }
+.profile-row { width: 100%; padding: 11px 4px; display: flex; align-items: center; gap: 10px; border: 0; border-bottom: 1px solid #edf1f3; color: inherit; background: transparent; text-align: left; }
+.profile-row:last-child { border-bottom: 0; }
+.profile-row:hover, .profile-row:focus-visible { border-radius: 8px; background: #f2f8f8; outline: none; }
+.profile-copy { min-width: 0; display: flex; flex: 1; flex-direction: column; gap: 3px; }
+.profile-copy strong { font-size: 13px; }
+.profile-copy small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-edit-mark { padding-left: 3px; color: var(--teal-dark); font-size: 11px; font-weight: 800; }
+.profile-list-footer { padding: 14px 20px 20px; border-top: 1px solid #edf1f3; }
 .role-pill { color: #175f6a; background: #dff2f3; }
-.add-user { margin: 10px 20px 20px; padding: 13px; border: 1px dashed #b9cad3; border-radius: 8px; }
-.add-user summary { color: var(--teal-dark); font-size: 12px; font-weight: 800; cursor: pointer; }
-.add-user form { margin-top: 14px; display: grid; gap: 12px; }
 .form-help { color: var(--muted); font-size: 10px; line-height: 1.45; }
-.add-user label, .modal-form label { display: flex; flex-direction: column; gap: 6px; color: #4e5d68; font-size: 11px; font-weight: 800; }
+.modal-form label { display: flex; flex-direction: column; gap: 6px; color: #4e5d68; font-size: 11px; font-weight: 800; }
+.delete-confirm { padding: 13px; display: grid; gap: 8px; border: 1px solid #edc5bf; border-radius: 9px; background: #fff5f3; }
+.delete-confirm > strong { color: var(--danger); font-size: 12px; }
+.delete-confirm > span { color: #76534f; font-size: 10px; line-height: 1.5; }
+.delete-confirm .button-row { margin-top: 4px; }
 .audit-list { padding: 9px 20px 18px; }
 .audit-list > div { padding: 10px 0; display: flex; gap: 10px; border-bottom: 1px solid #edf1f3; }
 .audit-list > div:last-child { border-bottom: 0; }
@@ -318,6 +327,9 @@ tfoot td { background: #f4f7f8; color: var(--navy); font-weight: 900; }
   .roster-filters { max-width: none; }
   .roster-filters .search-field { min-width: 0; }
   .form-grid { grid-template-columns: 1fr; }
+  .profile-row { align-items: flex-start; flex-wrap: wrap; }
+  .profile-copy { min-width: calc(100% - 48px); }
+  .profile-edit-mark { margin-left: auto; }
   .setup-banner, .template-box { align-items: stretch; flex-direction: column; }
   .setup-banner .button-row { width: 100%; }
   .setup-banner .button-row button { flex: 1; }
