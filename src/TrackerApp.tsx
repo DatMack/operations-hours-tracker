@@ -449,7 +449,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
 
 function RosterLimitControl({ total, value, onChange, detail }: { total: number; value: number; onChange: (value: number) => void; detail?: string }) {
   const shown = Math.min(value, total);
-  return <label className="roster-limit-control"><span>{detail ? \`${detail} · \` : ""}Showing <strong>{shown}</strong> of {total}</span><input type="range" min="3" max={Math.max(3, total)} value={Math.min(value, Math.max(3, total))} disabled={total <= 3} onChange={(event) => onChange(Number(event.target.value))} aria-label="Employees shown" /></label>;
+  return <label className="roster-limit-control"><span>{detail ? detail + " · " : ""}Showing <strong>{shown}</strong> of {total}</span><input type="range" min="3" max={Math.max(3, total)} value={Math.min(value, Math.max(3, total))} disabled={total <= 3} onChange={(event) => onChange(Number(event.target.value))} aria-label="Employees shown" /></label>;
 }
 
 function RosterFilters({ departments, department, setDepartment, color, setColor, period, setPeriod, search, setSearch }: { departments: Department[]; department: string; setDepartment: (value: string) => void; color: "all" | ShiftColor; setColor: (value: "all" | ShiftColor) => void; period: string; setPeriod: (value: string) => void; search: string; setSearch: (value: string) => void }) {
