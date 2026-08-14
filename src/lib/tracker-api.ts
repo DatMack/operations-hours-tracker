@@ -414,7 +414,7 @@ export async function mutateTracker(payload: Record<string, unknown>): Promise<T
     if (!validDate(workDate)) throw new Error("A valid date is required.");
     const result = await supabase.from("schedule_overrides").delete().eq("work_date", workDate);
     check(result.error, "delete the schedule correction");
-  } else if (action === "upsert_profile") {
+  } else if (action === "add_profile" || action === "update_profile") {
     requireAdmin(session.role);
     const email = textValue(payload.email, 160).toLowerCase();
     const fullName = textValue(payload.fullName, 100);
@@ -424,8 +424,26 @@ export async function mutateTracker(payload: Record<string, unknown>): Promise<T
     const shiftColor = role === "supervisor" ? payload.shiftColor : null;
     const shiftPeriod = role === "supervisor" ? payload.shiftPeriod : null;
     if (role === "supervisor" && (!assignment?.active || !validColor(shiftColor) || (shiftPeriod !== "Day" && shiftPeriod !== "Night"))) throw new Error("Supervisors require an active department, shift color, and Day or Night assignment.");
-    const result = await supabase.from("profiles").upsert({ email, full_name: fullName, role, active: payload.active !== false, department_id: assignment?.id ?? null, shift_color: shiftColor, shift_period: shiftPeriod }, { onConflict: "email" });
-    check(result.error, "save approved user access");
+    const values = { email, full_name: fullName, role, active: payload.active !== false, department_id: assignment?.id ?? null, shift_color: shiftColor, shift_period: shiftPeriod };
+    if (action === "add_profile") {
+      const result = await supabase.from("profiles").insert(values);
+      check(result.error, "add approved user access");
+    } else {
+      const originalEmail = textValue(payload.originalEmail, 160).toLowerCase();
+      if (!originalEmail.includes("@")) throw new Error("Select an approved user to update.");
+      if (originalEmail === session.email && email !== originalEmail) throw new Error("The signed-in administrator email cannot be changed from its own session. Use another administrator after updating Supabase Authentication.");
+      const result = await supabase.from("profiles").update(values).eq("email", originalEmail).select("email").maybeSingle();
+      check(result.error, "update approved user access");
+      if (!result.data) throw new Error("The selected approved user no longer exists. Refresh and try again.");
+    }
+  } else if (action === "delete_profile") {
+    requireAdmin(session.role);
+    const email = textValue(payload.email, 160).toLowerCase();
+    if (!email.includes("@")) throw new Error("Select an approved user to delete.");
+    if (email === session.email) throw new Error("You cannot delete the administrator account currently signed in.");
+    const result = await supabase.from("profiles").delete().eq("email", email).select("email").maybeSingle();
+    check(result.error, "delete approved user access");
+    if (!result.data) throw new Error("The selected approved user no longer exists. Refresh and try again.");
   } else {
     throw new Error("Unknown tracker action.");
   }
