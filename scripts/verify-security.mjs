@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
-const [client, html, baseMigration, migration, privateHelpersMigration, companyMigration, assignmentMigration, colorMigration, deployWorkflow] = await Promise.all([
+const [client, html, baseMigration, migration, privateHelpersMigration, companyMigration, assignmentMigration, colorMigration, profileManagementMigration, dashboardMigration, deployWorkflow] = await Promise.all([
   read("src/lib/supabase.ts"),
   read("index.html"),
   read("supabase/migrations/20260814000000_operations_hours_tracker.sql"),
@@ -11,6 +11,8 @@ const [client, html, baseMigration, migration, privateHelpersMigration, companyM
   read("supabase/migrations/20260814030000_company_departments.sql"),
   read("supabase/migrations/20260814040000_supervisor_assignments.sql"),
   read("supabase/migrations/20260814050000_supervisor_shift_color.sql"),
+  read("supabase/migrations/20260814060000_profile_admin_management.sql"),
+  read("supabase/migrations/20260814070000_personal_dashboards.sql"),
   read(".github/workflows/deploy-pages.yml"),
 ]);
 
@@ -53,6 +55,14 @@ assert.match(assignmentMigration, /Supervisors require a department and Day or N
 assert.match(colorMigration, /profiles_shift_color_check/i, "Supervisor shift color must be constrained in PostgreSQL");
 assert.match(colorMigration, /set active = false[\s\S]*department_id is null or shift_period is null/i, "Incomplete legacy supervisor assignments must be deactivated");
 assert.match(colorMigration, /department, shift color, and Day or Night assignment/i, "Complete supervisor crew assignments must be required");
+assert.match(profileManagementMigration, /grant select, insert, update, delete on table public\.profiles to authenticated/i, "Authenticated administrators need RLS-controlled profile deletion permission");
+assert.match(profileManagementMigration, /profiles_admin_delete[\s\S]*private\.tracker_is_admin\(\)/i, "Profile deletion must be restricted to administrators by RLS");
+assert.match(dashboardMigration, /user_id uuid primary key references auth\.users\(id\) on delete cascade/i, "Dashboard preferences must be tied to the authenticated identity");
+assert.match(dashboardMigration, /alter table public\.dashboard_preferences force row level security/i, "Dashboard preferences must force RLS");
+assert.match(dashboardMigration, /revoke all on table public\.dashboard_preferences from anon, authenticated/i, "Dashboard preferences must reject anonymous access");
+for (const operation of ["select", "insert", "update", "delete"]) {
+  assert.match(dashboardMigration, new RegExp(`dashboard_preferences_own_${operation}[\\s\\S]*auth\\.uid\\(\\) = user_id[\\s\\S]*private\\.tracker_is_approved\\(\\)`, "i"), `Dashboard ${operation} must be limited to the signed-in approved user`);
+}
 assert.match(deployWorkflow, /contents: read/, "The deployment workflow must use read-only repository access");
 assert.match(deployWorkflow, /pages: write/, "The deployment workflow may write only to Pages");
 

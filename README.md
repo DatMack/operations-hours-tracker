@@ -8,7 +8,8 @@ A private, role-based overtime, PTO, employee, department, and 2-2-3 shift track
 - Four crews: Blue Day, Blue Night, Yellow Day, and Yellow Night.
 - Overtime entry with quick hours, working department, cost code, reason, and notes.
 - Historical employee, department, and shift snapshots so later transfers or renames do not rewrite old reports.
-- Dashboard department distribution and reports filtered by employee, department, shift, cost code, reason, and date.
+- Personal dashboards with add/remove, ordering, sizing, KPI, chart, workforce, schedule, and daily-detail widgets saved for each signed-in account.
+- Reports filtered by employee, department, shift, cost code, reason, and date.
 - CSV employee and historical-data imports plus Excel-ready report exports.
 
 ## Architecture
@@ -60,3 +61,25 @@ The project includes the current Supabase project URL and browser-safe publishab
 - **Admin:** departments, employees, imports, schedule corrections, user approvals, reports, OT/PTO, and audit history.
 - **Supervisor:** OT and PTO entry/deletion plus read-only operational views.
 - **Viewer:** read-only access.
+
+## Managing approved users
+
+Administrators manage tracker authorization from **Administration**. Select an
+existing person to update their name, email, role, assignment, or active status;
+email changes update the selected profile rather than inserting a duplicate.
+The delete action removes tracker access and is audited, while the final active
+administrator and the currently signed-in account remain protected. Use **Add
+new person** only for a new approved profile.
+
+Supabase Authentication remains the identity and password system. Every active
+tracker profile must have a matching Supabase Auth user with the exact same
+email. Removing a tracker profile does not delete its Supabase Auth account.
+
+## Personal dashboards
+
+Every administrator, supervisor, and viewer can select **Customize dashboard**
+to choose their own widgets, order, and width. The layout is saved against the
+Supabase Auth user ID, so it follows that person between computers and browsers.
+Viewer accounts can customize their dashboard but remain read-only everywhere
+else. PostgreSQL row-level security allows each approved user to read or change
+only their own dashboard preference record.

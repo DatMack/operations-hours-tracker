@@ -3,11 +3,16 @@ import { shiftForDate, toDateInput, type ShiftColor } from "./lib/schedule";
 import {
   loadBundle,
   mutateTracker,
+  DEFAULT_DASHBOARD_WIDGETS,
   OT_REASONS,
   type Department,
+  type DashboardWidget,
+  type DashboardWidgetId,
+  type DashboardWidgetSize,
   type Employee,
   type OvertimeEntry,
   type Override,
+  type Profile,
   type PtoEntry,
   type TrackerBundle,
 } from "./lib/tracker-api";
@@ -15,6 +20,25 @@ import {
 type Tab = "dashboard" | "overtime" | "pto" | "employees" | "calendar" | "reports" | "settings" | "admin";
 type ImportKind = "employees" | "history";
 type OvertimeEditor = { employee: Employee; entry?: OvertimeEntry };
+
+const DASHBOARD_WIDGET_CATALOG: Array<{ id: DashboardWidgetId; label: string; description: string; category: string; defaultSize: DashboardWidgetSize }> = [
+  { id: "shift_today", label: "Scheduled shift", description: "Working color and scheduled headcount for the selected date.", category: "Schedule", defaultSize: "wide" },
+  { id: "kpi_ot", label: "Monthly overtime", description: "Total overtime hours and entries for the selected month.", category: "Key metrics", defaultSize: "compact" },
+  { id: "kpi_pto", label: "Monthly PTO", description: "Total PTO hours and entries for the selected month.", category: "Key metrics", defaultSize: "compact" },
+  { id: "kpi_employees", label: "Active employees", description: "Active employee and department counts.", category: "Key metrics", defaultSize: "compact" },
+  { id: "kpi_ot_people", label: "Employees with OT", description: "Unique employees receiving overtime this month.", category: "Key metrics", defaultSize: "compact" },
+  { id: "ot_trend", label: "Six-month OT trend", description: "Monthly overtime trend across the last six months.", category: "Charts", defaultSize: "wide" },
+  { id: "department_ot", label: "OT by department", description: "Overtime distribution across departments this month.", category: "Charts", defaultSize: "standard" },
+  { id: "shift_ot", label: "OT by shift", description: "Monthly overtime split between all four crews.", category: "Charts", defaultSize: "standard" },
+  { id: "reason_ot", label: "OT by reason", description: "Why overtime was assigned during the month.", category: "Charts", defaultSize: "standard" },
+  { id: "cost_code_ot", label: "OT by cost code", description: "Monthly hours summarized by cost code.", category: "Charts", defaultSize: "standard" },
+  { id: "pto_type", label: "PTO by type", description: "Monthly PTO hours summarized by PTO type.", category: "Charts", defaultSize: "standard" },
+  { id: "staffing_department", label: "Staffing by department", description: "Active headcount across company departments.", category: "Workforce", defaultSize: "standard" },
+  { id: "staffing_crew", label: "Staffing by crew", description: "Active headcount across Blue and Yellow day/night crews.", category: "Workforce", defaultSize: "standard" },
+  { id: "schedule", label: "Next 14 days", description: "Two-week Blue and Yellow schedule forecast.", category: "Schedule", defaultSize: "wide" },
+  { id: "selected_ot", label: "OT on selected date", description: "Employee-level overtime details for the selected date.", category: "Daily details", defaultSize: "standard" },
+  { id: "selected_pto", label: "PTO on selected date", description: "Employee-level PTO details for the selected date.", category: "Daily details", defaultSize: "standard" },
+];
 
 const NAV: Array<{ id: Tab; code: string; label: string }> = [
   { id: "dashboard", code: "DB", label: "Dashboard" },
@@ -67,6 +91,25 @@ function currentMonthRange(dateValue: string) {
   };
 }
 
+function monthKeys(dateValue: string, count = 6) {
+  const date = dateFromInput(dateValue);
+  return Array.from({ length: count }, (_, index) => {
+    const month = new Date(date.getFullYear(), date.getMonth() - (count - index - 1), 1);
+    return {
+      key: `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, "0")}`,
+      label: month.toLocaleDateString("en-US", { month: "short" }),
+    };
+  });
+}
+
+function totalsBy<T>(items: T[], key: (item: T) => string, value: (item: T) => number) {
+  return Array.from(items.reduce((totals, item) => {
+    const group = key(item) || "Unassigned";
+    totals.set(group, (totals.get(group) ?? 0) + value(item));
+    return totals;
+  }, new Map<string, number>())).sort((a, b) => b[1] - a[1]);
+}
+
 function initials(name: string) {
   return name.split(" ").filter(Boolean).map((part) => part[0]).slice(0, 2).join("").toUpperCase() || "?";
 }
@@ -79,10 +122,10 @@ function EmptyState({ title, body }: { title: string; body: string }) {
   return <div className="empty-state"><div className="empty-mark">+</div><strong>{title}</strong><span>{body}</span></div>;
 }
 
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+function Modal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="modal-card" role="dialog" aria-modal="true" aria-label={title}>
+      <section className={`modal-card ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-head"><h2>{title}</h2><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div>
         {children}
       </section>
@@ -103,6 +146,9 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
   const [overrideDate, setOverrideDate] = useState<string | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null);
+  const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
+  const [addingProfile, setAddingProfile] = useState(false);
+  const [customizingDashboard, setCustomizingDashboard] = useState(false);
   const [importKind, setImportKind] = useState<ImportKind | null>(null);
   const [rosterSearch, setRosterSearch] = useState("");
   const [rosterDepartment, setRosterDepartment] = useState("all");
@@ -227,11 +273,6 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
     if (reportShift !== "all" && `${employee?.shiftColor} ${employee?.shiftPeriod}` !== reportShift) return false;
     return true;
   });
-  const departmentTotals = Array.from(monthOt.reduce((totals, entry) => {
-    totals.set(entry.departmentName, (totals.get(entry.departmentName) ?? 0) + entry.hours);
-    return totals;
-  }, new Map<string, number>())).sort((a, b) => b[1] - a[1]);
-
   function downloadReport() {
     const rows = [
       ["type", "date", "employee_name", "hours", "department", "cost_code_or_pto_type", "reason", "notes", "shift", "entered_by"],
@@ -276,27 +317,9 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
 
         {tab === "dashboard" && (
           <>
-            <div className="page-heading"><div><p className="eyebrow">Company operations overview</p><h1>Dashboard</h1><span>{prettyDate(selectedDate)} · Current schedule and monthly activity</span></div><label className="date-control"><span>View date</span><input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label></div>
-            <section className={`shift-hero ${workingColor.toLowerCase()}`}>
-              <div><span className="hero-kicker">Scheduled today</span><h2>{workingColor} Shift</h2><p>Both {workingColor} Day and {workingColor} Night crews are on their regular 2-2-3 schedule.</p></div>
-              <div className="hero-count"><strong>{activeEmployees.filter((employee) => employee.shiftColor === workingColor).length}</strong><span>scheduled employees</span></div>
-              {data.scheduleOverrides.some((item) => item.workDate === selectedDate) && <span className="override-flag">Admin corrected</span>}
-            </section>
+            <div className="page-heading"><div><p className="eyebrow">Your operations workspace</p><h1>Dashboard</h1><span>{prettyDate(selectedDate)} · Saved personally for {data.session.fullName}</span></div><div className="dashboard-heading-actions"><label className="date-control"><span>View date</span><input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label><button className="secondary-button" onClick={() => setCustomizingDashboard(true)}>Customize dashboard</button></div></div>
             {!activeEmployees.length && <section className="setup-banner"><div><span className="setup-number">1</span><div><strong>Your tracker is clean and ready</strong><span>Confirm departments, then add employees individually or import the complete roster.</span></div></div><div className="button-row">{isAdmin && <button className="secondary-button" onClick={() => setTab("settings")}>Review departments</button>}<button className="primary-button" onClick={() => setTab("employees")}>Add employees</button></div></section>}
-            <section className="metric-grid">
-              <article><span className="metric-label">Overtime this month</span><strong>{monthOt.reduce((sum, entry) => sum + entry.hours, 0).toFixed(1)}<small> hrs</small></strong><em>{monthOt.length} entries</em></article>
-              <article><span className="metric-label">PTO this month</span><strong>{monthPto.reduce((sum, entry) => sum + entry.hours, 0).toFixed(1)}<small> hrs</small></strong><em>{monthPto.length} entries</em></article>
-              <article><span className="metric-label">Active employees</span><strong>{activeEmployees.length}</strong><em>{activeDepartments.length} active departments</em></article>
-              <article><span className="metric-label">Employees with OT</span><strong>{new Set(monthOt.map((entry) => entry.employeeId)).size}</strong><em>{monthOt.length ? (monthOt.reduce((sum, entry) => sum + entry.hours, 0) / monthOt.length).toFixed(1) : "0.0"} avg hrs / entry</em></article>
-            </section>
-            <section className="panel"><div className="panel-head"><div><p className="eyebrow">Looking ahead</p><h2>Next 14 days</h2></div><button className="text-button" onClick={() => setTab("calendar")}>Full calendar →</button></div>
-              <div className="forecast-grid">{Array.from({ length: 14 }, (_, index) => addDays(selectedDate, index)).map((date) => { const color = shiftForDate(date, data.scheduleOverrides); return <div className={`forecast-day ${color.toLowerCase()}`} key={date}><span>{dateFromInput(date).toLocaleDateString("en-US", { weekday: "short" })}</span><strong>{dateFromInput(date).getDate()}</strong><ShiftBadge color={color} compact /></div>; })}</div>
-            </section>
-            <section className="two-column">
-              <div className="panel"><div className="panel-head"><div><p className="eyebrow">Monthly distribution</p><h2>Hours by department</h2></div></div><DepartmentBreakdown totals={departmentTotals} /></div>
-              <div className="panel"><div className="panel-head"><h2>Overtime on {prettyDate(selectedDate, true)}</h2><button className="text-button" onClick={() => setTab("overtime")}>Manage →</button></div>{selectedOt.length ? <div className="activity-list">{selectedOt.map((entry) => <div key={entry.id}><span className="avatar">{initials(entry.employeeName)}</span><div><strong>{entry.employeeName}</strong><small>{entry.departmentName} · {entry.costCode} · {entry.reason}</small></div><b>{entry.hours} hrs</b></div>)}</div> : <EmptyState title="No overtime entered" body="Entries for this date will appear here." />}</div>
-            </section>
-            <section className="panel"><div className="panel-head"><h2>PTO on {prettyDate(selectedDate, true)}</h2><button className="text-button" onClick={() => setTab("pto")}>Manage →</button></div>{selectedPto.length ? <div className="activity-list">{selectedPto.map((entry) => { const employee = employeesById.get(entry.employeeId); return <div key={entry.id}><span className="avatar">{initials(employee?.name || "Unknown")}</span><div><strong>{employee?.name || "Unknown"}</strong><small>{employee?.department || "No department"} · {entry.ptoType}</small></div><b>{entry.hours} hrs</b></div>; })}</div> : <EmptyState title="No PTO entered" body="PTO entries for this date will appear here." />}</section>
+            {data.dashboardWidgets.length ? <section className="dashboard-widget-grid">{data.dashboardWidgets.map((widget) => <DashboardWidgetView key={widget.id} widget={widget} data={data} selectedDate={selectedDate} workingColor={workingColor} activeEmployees={activeEmployees} activeDepartments={activeDepartments} monthOt={monthOt} monthPto={monthPto} selectedOt={selectedOt} selectedPto={selectedPto} employeesById={employeesById} onNavigate={setTab} />)}</section> : <section className="panel dashboard-empty"><EmptyState title="Your dashboard is empty" body="Choose Customize dashboard to add the metrics, charts, and daily details you want to see." /><button className="primary-button" onClick={() => setCustomizingDashboard(true)}>Add dashboard widgets</button></section>}
           </>
         )}
 
@@ -369,7 +392,23 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
           <>
             <div className="page-heading"><div><p className="eyebrow">Protected access</p><h1>Administration</h1><span>Approve users, assign roles, and review recent changes.</span></div></div>
             <section className="two-column admin-columns">
-              <div className="panel"><div className="panel-head"><div><p className="eyebrow">User access</p><h2>Approved accounts</h2></div></div><div className="profile-list">{data.profiles.map((profile) => <div key={profile.email}><span className="avatar">{initials(profile.fullName)}</span><div><strong>{profile.fullName}</strong><small>{profile.email}{profile.role === "supervisor" ? ` · ${data.departments.find((department) => department.id === profile.departmentId)?.name ?? "Unassigned"} · ${profile.shiftColor ?? "Unassigned"} ${profile.shiftPeriod ?? ""}`.trimEnd() : ""}</small></div><span className="role-pill">{profile.role}</span><span className={`status-pill ${profile.active ? "active" : "inactive"}`}>{profile.active ? "Active" : "Inactive"}</span></div>)}</div><details className="add-user"><summary>+ Add or update a user</summary><form onSubmit={async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const ok = await mutate({ action: "upsert_profile", fullName: form.get("fullName"), email: form.get("email"), role: form.get("role"), departmentId: form.get("departmentId"), shiftColor: form.get("shiftColor"), shiftPeriod: form.get("shiftPeriod"), active: form.get("active") === "on" }, "User access saved."); if (ok) event.currentTarget.reset(); }}><label><span>Full name</span><input name="fullName" required /></label><label><span>Email</span><input type="email" name="email" required /></label><label><span>Role</span><select name="role" defaultValue="supervisor"><option value="supervisor">Supervisor</option><option value="viewer">Viewer</option><option value="admin">Admin</option></select></label><label><span>Supervisor department</span><select name="departmentId" defaultValue={activeDepartments[0]?.id}>{activeDepartments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select></label><div className="form-grid"><label><span>Supervisor shift color</span><select name="shiftColor" defaultValue="Blue"><option>Blue</option><option>Yellow</option></select></label><label><span>Supervisor period</span><select name="shiftPeriod" defaultValue="Day"><option>Day</option><option>Night</option></select></label></div><small className="form-help">Department, shift color, and period are required when the role is Supervisor.</small><label className="checkbox-label"><input type="checkbox" name="active" defaultChecked /><span>Active account</span></label><button className="primary-button" disabled={busy}>Save user</button></form></details></div>
+              <div className="panel">
+                <div className="panel-head"><div><p className="eyebrow">User access</p><h2>Approved accounts</h2></div><span className="subtle-count">Select a person to manage</span></div>
+                {data.profiles.length ? (
+                  <div className="profile-list">
+                    {data.profiles.map((profile) => (
+                      <button type="button" className="profile-row" key={profile.email} onClick={() => setEditingProfile(profile)}>
+                        <span className="avatar">{initials(profile.fullName)}</span>
+                        <span className="profile-copy"><strong>{profile.fullName}</strong><small>{profile.email}{profile.role === "supervisor" ? ` · ${data.departments.find((department) => department.id === profile.departmentId)?.name ?? "Unassigned"} · ${profile.shiftColor ?? "Unassigned"} ${profile.shiftPeriod ?? ""}`.trimEnd() : ""}</small></span>
+                        <span className="role-pill">{profile.role}</span>
+                        <span className={`status-pill ${profile.active ? "active" : "inactive"}`}>{profile.active ? "Active" : "Inactive"}</span>
+                        <span className="profile-edit-mark">Edit</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : <EmptyState title="No approved accounts" body="Add the first approved person below." />}
+                <div className="profile-list-footer"><button type="button" className="primary-button full" onClick={() => setAddingProfile(true)}>+ Add new person</button></div>
+              </div>
               <div className="panel"><div className="panel-head"><div><p className="eyebrow">Audit history</p><h2>Recent changes</h2></div></div><div className="audit-list">{data.auditLog.length ? data.auditLog.slice(0, 20).map((item) => <div key={item.id}><span className="audit-dot" /><div><strong>{item.action} {item.entityType.replaceAll("_", " ")}</strong><small>{item.userEmail} · {timestampDate(item.createdAt).toLocaleString()}</small></div></div>) : <EmptyState title="No changes yet" body="Administrative and entry changes will be recorded here." />}</div></div>
             </section>
             <section className="security-strip"><div className="lock-mark">✓</div><div><strong>Company pilot protections</strong><span>Supabase login, approved roles, forced row-level security, database validation, historical snapshots, and tamper-resistant audit history are enabled.</span></div></section>
@@ -382,6 +421,9 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
       {overrideDate && <Modal title="Correct scheduled shift" onClose={() => setOverrideDate(null)}><OverrideForm date={overrideDate} current={shiftForDate(overrideDate, data.scheduleOverrides)} override={data.scheduleOverrides.find((item) => item.workDate === overrideDate)} busy={busy} onSave={async (values) => { const ok = await mutate({ action: "set_override", workDate: overrideDate, ...values }, "Schedule correction saved."); if (ok) setOverrideDate(null); }} onRemove={async () => { const ok = await mutate({ action: "delete_override", workDate: overrideDate }, "Schedule correction removed."); if (ok) setOverrideDate(null); }} /></Modal>}
       {editingEmployee && <Modal title={editingEmployee.id ? "Edit employee" : "Add employee"} onClose={() => setEditingEmployee(null)}><EmployeeForm employee={editingEmployee} departments={data.departments} busy={busy} onSave={async (values) => { const ok = await mutate({ action: editingEmployee.id ? "update_employee" : "add_employee", id: editingEmployee.id, ...values }, editingEmployee.id ? "Employee updated." : "Employee added."); if (ok) setEditingEmployee(null); }} /></Modal>}
       {editingDepartment && <Modal title={editingDepartment.id ? "Edit department" : "Add department"} onClose={() => setEditingDepartment(null)}><DepartmentForm department={editingDepartment} activeEmployeeCount={activeEmployees.filter((employee) => employee.departmentId === editingDepartment.id).length} busy={busy} onSave={async (values) => { const ok = await mutate({ action: editingDepartment.id ? "update_department" : "add_department", id: editingDepartment.id, ...values }, editingDepartment.id ? "Department updated." : "Department added."); if (ok) setEditingDepartment(null); }} /></Modal>}
+      {editingProfile && <Modal title="Update user access" onClose={() => setEditingProfile(null)}><ProfileForm profile={editingProfile} departments={data.departments} busy={busy} currentUserEmail={data.session.email} onSave={async (values) => { const ok = await mutate({ action: "update_profile", originalEmail: editingProfile.email, ...values }, "User access updated."); if (ok) setEditingProfile(null); }} onDelete={async () => { const ok = await mutate({ action: "delete_profile", email: editingProfile.email }, "User access deleted."); if (ok) setEditingProfile(null); }} /></Modal>}
+      {addingProfile && <Modal title="Add new person" onClose={() => setAddingProfile(false)}><ProfileForm departments={data.departments} busy={busy} currentUserEmail={data.session.email} onSave={async (values) => { const ok = await mutate({ action: "add_profile", ...values }, "New user access added."); if (ok) setAddingProfile(false); }} /></Modal>}
+      {customizingDashboard && <Modal title="Customize your dashboard" wide onClose={() => setCustomizingDashboard(false)}><DashboardCustomizer initial={data.dashboardWidgets} busy={busy} onSave={async (widgets) => { const ok = await mutate({ action: "save_dashboard_layout", widgets }, "Your dashboard layout was saved."); if (ok) setCustomizingDashboard(false); }} /></Modal>}
       {importKind && <Modal title={importKind === "employees" ? "Import employee roster" : "Import overtime & PTO history"} onClose={() => setImportKind(null)}><ImportForm kind={importKind} busy={busy} onImport={async (rows) => { const ok = await mutate({ action: importKind === "employees" ? "import_employees" : "import_history", rows }, importKind === "employees" ? "Employee roster imported." : "Historical records imported."); if (ok) setImportKind(null); }} /></Modal>}
     </div>
   );
@@ -389,6 +431,86 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
 
 function RosterFilters({ departments, department, setDepartment, color, setColor, period, setPeriod, search, setSearch }: { departments: Department[]; department: string; setDepartment: (value: string) => void; color: "all" | ShiftColor; setColor: (value: "all" | ShiftColor) => void; period: string; setPeriod: (value: string) => void; search: string; setSearch: (value: string) => void }) {
   return <section className="filter-bar roster-filters"><label><span>Department</span><select value={department} onChange={(event) => setDepartment(event.target.value)}><option value="all">All departments</option>{departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>Shift color</span><select value={color} onChange={(event) => setColor(event.target.value as "all" | ShiftColor)}><option value="all">Blue & Yellow</option><option>Blue</option><option>Yellow</option></select></label><label><span>Shift period</span><select value={period} onChange={(event) => setPeriod(event.target.value)}><option value="all">Day & Night</option><option>Day</option><option>Night</option></select></label><label className="search-field"><span>Find employee</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name" /></label></section>;
+}
+
+function DashboardMetric({ widget, label, value, unit, detail }: { widget: DashboardWidget; label: string; value: string | number; unit?: string; detail: string }) {
+  return <article className={`dashboard-widget dashboard-metric ${widget.size}`}><span className="metric-label">{label}</span><strong>{value}{unit && <small> {unit}</small>}</strong><em>{detail}</em></article>;
+}
+
+function DashboardBars({ rows, unit = "hrs" }: { rows: Array<[string, number]>; unit?: string }) {
+  const visible = rows.slice(0, 8);
+  const maximum = Math.max(...visible.map(([, value]) => value), 0);
+  if (!visible.length || maximum === 0) return <EmptyState title="No data yet" body="This chart will fill in as tracker entries are added." />;
+  return <div className="dashboard-bars">{visible.map(([label, value]) => <div key={label}><div><strong>{label}</strong><span>{Number.isInteger(value) ? value : value.toFixed(1)} {unit}</span></div><i><b style={{ width: `${Math.max((value / maximum) * 100, 2)}%` }} /></i></div>)}</div>;
+}
+
+function DashboardTrend({ selectedDate, entries }: { selectedDate: string; entries: OvertimeEntry[] }) {
+  const months = monthKeys(selectedDate);
+  const values = months.map((month) => entries.filter((entry) => entry.workDate.startsWith(month.key)).reduce((sum, entry) => sum + entry.hours, 0));
+  const maximum = Math.max(...values, 1);
+  const width = 640;
+  const height = 170;
+  const paddingX = 28;
+  const paddingY = 22;
+  const points = values.map((value, index) => {
+    const x = paddingX + (index * (width - paddingX * 2)) / Math.max(values.length - 1, 1);
+    const y = height - paddingY - (value / maximum) * (height - paddingY * 2);
+    return { x, y, value };
+  });
+  return <div className="trend-chart"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`Overtime trend: ${months.map((month, index) => `${month.label} ${values[index].toFixed(1)} hours`).join(", ")}`}><line x1={paddingX} y1={height - paddingY} x2={width - paddingX} y2={height - paddingY} /><polyline points={points.map((point) => `${point.x},${point.y}`).join(" ")} /><g>{points.map((point, index) => <g key={months[index].key}><circle cx={point.x} cy={point.y} r="5" /><text x={point.x} y={Math.max(point.y - 11, 12)} textAnchor="middle">{point.value.toFixed(1)}</text></g>)}</g></svg><div>{months.map((month) => <span key={month.key}>{month.label}</span>)}</div></div>;
+}
+
+function DashboardPanel({ widget, eyebrow, title, action, children }: { widget: DashboardWidget; eyebrow?: string; title: string; action?: React.ReactNode; children: React.ReactNode }) {
+  return <article className={`dashboard-widget panel ${widget.size}`}><div className="panel-head"><div>{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h2>{title}</h2></div>{action}</div>{children}</article>;
+}
+
+function DashboardWidgetView({ widget, data, selectedDate, workingColor, activeEmployees, activeDepartments, monthOt, monthPto, selectedOt, selectedPto, employeesById, onNavigate }: { widget: DashboardWidget; data: TrackerBundle; selectedDate: string; workingColor: ShiftColor; activeEmployees: Employee[]; activeDepartments: Department[]; monthOt: OvertimeEntry[]; monthPto: PtoEntry[]; selectedOt: OvertimeEntry[]; selectedPto: PtoEntry[]; employeesById: Map<string, Employee>; onNavigate: (tab: Tab) => void }) {
+  const otHours = monthOt.reduce((sum, entry) => sum + entry.hours, 0);
+  const ptoHours = monthPto.reduce((sum, entry) => sum + entry.hours, 0);
+
+  if (widget.id === "kpi_ot") return <DashboardMetric widget={widget} label="Overtime this month" value={otHours.toFixed(1)} unit="hrs" detail={`${monthOt.length} entries`} />;
+  if (widget.id === "kpi_pto") return <DashboardMetric widget={widget} label="PTO this month" value={ptoHours.toFixed(1)} unit="hrs" detail={`${monthPto.length} entries`} />;
+  if (widget.id === "kpi_employees") return <DashboardMetric widget={widget} label="Active employees" value={activeEmployees.length} detail={`${activeDepartments.length} active departments`} />;
+  if (widget.id === "kpi_ot_people") return <DashboardMetric widget={widget} label="Employees with OT" value={new Set(monthOt.map((entry) => entry.employeeId)).size} detail={`${monthOt.length ? (otHours / monthOt.length).toFixed(1) : "0.0"} average hrs per entry`} />;
+
+  if (widget.id === "shift_today") return <article className={`dashboard-widget dashboard-shift ${workingColor.toLowerCase()} ${widget.size}`}><div><span className="hero-kicker">Scheduled on {prettyDate(selectedDate, true)}</span><h2>{workingColor} Shift</h2><p>Both {workingColor} Day and {workingColor} Night crews are scheduled on the regular 2-2-3 rotation.</p></div><div className="hero-count"><strong>{activeEmployees.filter((employee) => employee.shiftColor === workingColor).length}</strong><span>scheduled employees</span></div>{data.scheduleOverrides.some((item) => item.workDate === selectedDate) && <span className="override-flag">Admin corrected</span>}</article>;
+
+  if (widget.id === "schedule") return <DashboardPanel widget={widget} eyebrow="Looking ahead" title="Next 14 days" action={<button className="text-button" onClick={() => onNavigate("calendar")}>Full calendar →</button>}><div className="forecast-grid">{Array.from({ length: 14 }, (_, index) => addDays(selectedDate, index)).map((date) => { const color = shiftForDate(date, data.scheduleOverrides); return <div className={`forecast-day ${color.toLowerCase()}`} key={date}><span>{dateFromInput(date).toLocaleDateString("en-US", { weekday: "short" })}</span><strong>{dateFromInput(date).getDate()}</strong><ShiftBadge color={color} compact /></div>; })}</div></DashboardPanel>;
+
+  if (widget.id === "selected_ot") return <DashboardPanel widget={widget} title={`Overtime on ${prettyDate(selectedDate, true)}`} action={<button className="text-button" onClick={() => onNavigate("overtime")}>Open details →</button>}>{selectedOt.length ? <div className="activity-list">{selectedOt.map((entry) => <div key={entry.id}><span className="avatar">{initials(entry.employeeName)}</span><div><strong>{entry.employeeName}</strong><small>{entry.departmentName} · {entry.costCode} · {entry.reason}</small></div><b>{entry.hours} hrs</b></div>)}</div> : <EmptyState title="No overtime entered" body="Entries for this date will appear here." />}</DashboardPanel>;
+
+  if (widget.id === "selected_pto") return <DashboardPanel widget={widget} title={`PTO on ${prettyDate(selectedDate, true)}`} action={<button className="text-button" onClick={() => onNavigate("pto")}>Open details →</button>}>{selectedPto.length ? <div className="activity-list">{selectedPto.map((entry) => { const employee = employeesById.get(entry.employeeId); return <div key={entry.id}><span className="avatar">{initials(employee?.name || "Unknown")}</span><div><strong>{employee?.name || "Unknown"}</strong><small>{employee?.department || "No department"} · {entry.ptoType}</small></div><b>{entry.hours} hrs</b></div>; })}</div> : <EmptyState title="No PTO entered" body="PTO entries for this date will appear here." />}</DashboardPanel>;
+
+  if (widget.id === "ot_trend") return <DashboardPanel widget={widget} eyebrow="Historical trend" title="Overtime over six months"><DashboardTrend selectedDate={selectedDate} entries={data.overtimeEntries} /></DashboardPanel>;
+
+  const chartConfig: Partial<Record<DashboardWidgetId, { eyebrow: string; title: string; rows: Array<[string, number]>; unit?: string }>> = {
+    department_ot: { eyebrow: "Monthly distribution", title: "OT hours by department", rows: totalsBy(monthOt, (entry) => entry.departmentName, (entry) => entry.hours) },
+    shift_ot: { eyebrow: "Monthly distribution", title: "OT hours by shift", rows: totalsBy(monthOt, (entry) => entry.shiftName, (entry) => entry.hours) },
+    reason_ot: { eyebrow: "Monthly distribution", title: "OT hours by reason", rows: totalsBy(monthOt, (entry) => entry.reason, (entry) => entry.hours) },
+    cost_code_ot: { eyebrow: "Monthly distribution", title: "OT hours by cost code", rows: totalsBy(monthOt, (entry) => entry.costCode, (entry) => entry.hours) },
+    pto_type: { eyebrow: "Monthly distribution", title: "PTO hours by type", rows: totalsBy(monthPto, (entry) => entry.ptoType, (entry) => entry.hours) },
+    staffing_department: { eyebrow: "Current workforce", title: "Staffing by department", rows: totalsBy(activeEmployees, (employee) => employee.department, () => 1), unit: "people" },
+    staffing_crew: { eyebrow: "Current workforce", title: "Staffing by crew", rows: totalsBy(activeEmployees, (employee) => `${employee.shiftColor} ${employee.shiftPeriod}`, () => 1), unit: "people" },
+  };
+  const chart = chartConfig[widget.id];
+  if (chart) return <DashboardPanel widget={widget} eyebrow={chart.eyebrow} title={chart.title}><DashboardBars rows={chart.rows} unit={chart.unit} /></DashboardPanel>;
+  return null;
+}
+
+function DashboardCustomizer({ initial, busy, onSave }: { initial: DashboardWidget[]; busy: boolean; onSave: (widgets: DashboardWidget[]) => Promise<void> }) {
+  const [widgets, setWidgets] = useState(() => initial.map((widget) => ({ ...widget })));
+  const activeIds = new Set(widgets.map((widget) => widget.id));
+  const available = DASHBOARD_WIDGET_CATALOG.filter((item) => !activeIds.has(item.id));
+  const catalog = new Map(DASHBOARD_WIDGET_CATALOG.map((item) => [item.id, item]));
+  const move = (index: number, offset: number) => setWidgets((current) => {
+    const destination = index + offset;
+    if (destination < 0 || destination >= current.length) return current;
+    const next = [...current];
+    [next[index], next[destination]] = [next[destination], next[index]];
+    return next;
+  });
+
+  return <div className="dashboard-customizer"><p className="modal-copy">Choose exactly what appears on your dashboard. Order and size are saved only for your signed-in account, including Viewer accounts used by management.</p><div className="customizer-columns"><section><div className="customizer-head"><div><p className="eyebrow">Current layout</p><h3>{widgets.length} widgets</h3></div><button type="button" className="text-button" onClick={() => setWidgets(DEFAULT_DASHBOARD_WIDGETS.map((widget) => ({ ...widget })))}>Reset default</button></div>{widgets.length ? <div className="selected-widget-list">{widgets.map((widget, index) => { const item = catalog.get(widget.id); return <div key={widget.id}><div><strong>{item?.label}</strong><small>{item?.category}</small></div><select aria-label={`Size for ${item?.label}`} value={widget.size} onChange={(event) => setWidgets((current) => current.map((currentWidget) => currentWidget.id === widget.id ? { ...currentWidget, size: event.target.value as DashboardWidgetSize } : currentWidget))}><option value="compact">Compact</option><option value="standard">Half width</option><option value="wide">Full width</option></select><div className="widget-order"><button type="button" disabled={index === 0} onClick={() => move(index, -1)} aria-label={`Move ${item?.label} up`}>↑</button><button type="button" disabled={index === widgets.length - 1} onClick={() => move(index, 1)} aria-label={`Move ${item?.label} down`}>↓</button></div><button type="button" className="delete-link" onClick={() => setWidgets((current) => current.filter((currentWidget) => currentWidget.id !== widget.id))}>Remove</button></div>; })}</div> : <EmptyState title="No widgets selected" body="Add widgets from the catalog to build your dashboard." />}</section><section><div className="customizer-head"><div><p className="eyebrow">Widget catalog</p><h3>{available.length} available</h3></div>{available.length > 0 && <button type="button" className="text-button" onClick={() => setWidgets((current) => [...current, ...available.map((item) => ({ id: item.id, size: item.defaultSize }))])}>Add all</button>}</div><div className="available-widget-list">{available.length ? available.map((item) => <article key={item.id}><div><span>{item.category}</span><strong>{item.label}</strong><p>{item.description}</p></div><button type="button" className="secondary-button" onClick={() => setWidgets((current) => [...current, { id: item.id, size: item.defaultSize }])}>Add</button></article>) : <EmptyState title="Everything is on your dashboard" body="Remove a widget from the current layout to place it back here." />}</div></section></div><div className="customizer-footer"><span>Your changes are not applied until you save.</span><button className="primary-button" disabled={busy} onClick={() => void onSave(widgets)}>{busy ? "Saving…" : "Save my dashboard"}</button></div></div>;
 }
 
 function OvertimeForm({ employee, entry, date, departments, busy, onSubmit, onDelete }: { employee: Employee; entry?: OvertimeEntry; date: string; departments: Department[]; busy: boolean; onSubmit: (values: Record<string, unknown>) => Promise<void>; onDelete?: () => Promise<void> }) {
@@ -414,6 +536,29 @@ function EmployeeForm({ employee, departments, busy, onSave }: { employee: Emplo
 
 function DepartmentForm({ department, activeEmployeeCount, busy, onSave }: { department: Department; activeEmployeeCount: number; busy: boolean; onSave: (values: Record<string, unknown>) => Promise<void> }) {
   return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const active = activeEmployeeCount > 0 && department.active ? true : form.get("active") === "on"; void onSave({ name: form.get("name"), defaultCostCode: form.get("defaultCostCode"), active }); }}><p className="modal-copy">The default cost code fills automatically when this department is selected for overtime. Supervisors can still enter a different code when needed.</p><label><span>Department name</span><input name="name" defaultValue={department.name} maxLength={100} required autoFocus /></label><label><span>Default cost code</span><input name="defaultCostCode" defaultValue={department.defaultCostCode} maxLength={50} placeholder="Example: EXT-100" required /></label><label className="checkbox-label"><input type="checkbox" name="active" defaultChecked={department.active} disabled={activeEmployeeCount > 0 && department.active} /><span>Active department{activeEmployeeCount > 0 && department.active ? ` · ${activeEmployeeCount} active employees must be moved or deactivated first` : ""}</span></label><div className="privacy-note"><strong>Historical records are protected</strong><span>Renaming this department updates current employee assignments. Existing overtime keeps its original department snapshot.</span></div><button className="primary-button full" disabled={busy}>{busy ? "Saving…" : "Save department"}</button></form>;
+}
+
+function ProfileForm({ profile, departments, busy, currentUserEmail, onSave, onDelete }: { profile?: Profile; departments: Department[]; busy: boolean; currentUserEmail: string; onSave: (values: Record<string, unknown>) => Promise<void>; onDelete?: () => Promise<void> }) {
+  const [role, setRole] = useState(profile?.role ?? "supervisor");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const selectableDepartments = departments.filter((department) => department.active || department.id === profile?.departmentId);
+  const currentUser = profile?.email === currentUserEmail;
+
+  return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); void onSave({ fullName: form.get("fullName"), email: form.get("email"), role, departmentId: role === "supervisor" ? form.get("departmentId") : null, shiftColor: role === "supervisor" ? form.get("shiftColor") : null, shiftPeriod: role === "supervisor" ? form.get("shiftPeriod") : null, active: form.get("active") === "on" }); }}>
+    <label><span>Full name</span><input name="fullName" defaultValue={profile?.fullName ?? ""} maxLength={100} required autoFocus /></label>
+    <label><span>Email</span><input type="email" name="email" defaultValue={profile?.email ?? ""} maxLength={160} required /></label>
+    <label><span>Role</span><select name="role" value={role} onChange={(event) => setRole(event.target.value as Profile["role"])}><option value="supervisor">Supervisor</option><option value="viewer">Viewer</option><option value="admin">Admin</option></select></label>
+    {role === "supervisor" && <>
+      <label><span>Supervisor department</span><select name="departmentId" defaultValue={profile?.departmentId ?? selectableDepartments[0]?.id} required>{selectableDepartments.map((department) => <option key={department.id} value={department.id}>{department.name}{department.active ? "" : " (inactive)"}</option>)}</select></label>
+      <div className="form-grid"><label><span>Supervisor shift color</span><select name="shiftColor" defaultValue={profile?.shiftColor ?? "Blue"}><option>Blue</option><option>Yellow</option></select></label><label><span>Supervisor period</span><select name="shiftPeriod" defaultValue={profile?.shiftPeriod ?? "Day"}><option>Day</option><option>Night</option></select></label></div>
+      <small className="form-help">Department, shift color, and period are required for supervisors.</small>
+    </>}
+    <label className="checkbox-label"><input type="checkbox" name="active" defaultChecked={profile?.active ?? true} /><span>Active account</span></label>
+    <div className="privacy-note"><strong>{profile ? "Email updates replace this selected record" : "Supabase Authentication is still required"}</strong><span>{profile ? "Changing this email will not create a duplicate tracker profile. The user's Supabase Authentication email must also match before they can sign in." : "Create or invite the matching Supabase Authentication user with this exact email."}</span></div>
+    {confirmDelete && <div className="delete-confirm"><strong>Delete tracker access for {profile?.fullName}?</strong><span>This removes the approved tracker profile and records the deletion in Audit history. It does not delete the person's Supabase Authentication account.</span><div className="button-row"><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirmDelete(false)}>Cancel</button><button type="button" className="danger-button" disabled={busy} onClick={() => void onDelete?.()}>{busy ? "Deleting…" : "Confirm delete"}</button></div></div>}
+    {!confirmDelete && <div className="button-row">{profile && onDelete && <button type="button" className="danger-button" disabled={busy || currentUser} title={currentUser ? "You cannot delete the account currently signed in." : undefined} onClick={() => setConfirmDelete(true)}>Delete user access</button>}<button className="primary-button" disabled={busy || (role === "supervisor" && !selectableDepartments.length)}>{busy ? "Saving…" : profile ? "Update user" : "Add person"}</button></div>}
+    {currentUser && <small className="form-help">Your currently signed-in administrator account cannot be deleted from its own session.</small>}
+  </form>;
 }
 
 function normalizeDateValue(value: string) {
@@ -492,11 +637,6 @@ function OverrideForm({ date, current, override, busy, onSave, onRemove }: { dat
 
 function EntryTable({ title, entries, canChange, onEdit, onDelete }: { title: string; entries: Array<{ id: string; name: string; detail: string; subdetail?: string; hours: number; notes: string }>; canChange: boolean; onEdit?: (id: string) => void; onDelete: (id: string) => void }) {
   return <section className="panel table-panel"><div className="panel-head padded"><h2>{title}</h2><span className="subtle-count">{entries.length} entries · {entries.reduce((sum, entry) => sum + entry.hours, 0).toFixed(1)} hrs</span></div>{entries.length ? <div className="table-wrap"><table><thead><tr><th>Employee</th><th>Department / code</th><th>Reason / type</th><th>Hours</th><th>Notes</th>{canChange && <th />}</tr></thead><tbody>{entries.map((entry) => <tr key={entry.id}><td><strong>{entry.name}</strong></td><td>{entry.detail}</td><td>{entry.subdetail || "—"}</td><td>{entry.hours}</td><td className="notes-cell">{entry.notes || "—"}</td>{canChange && <td><div className="row-actions">{onEdit && <button className="text-button" onClick={() => onEdit(entry.id)}>Edit</button>}<button className="delete-link" onClick={() => onDelete(entry.id)}>Remove</button></div></td>}</tr>)}</tbody></table></div> : <EmptyState title="Nothing entered for this date" body="Use the employee roster above to add an entry." />}</section>;
-}
-
-function DepartmentBreakdown({ totals }: { totals: Array<[string, number]> }) {
-  const max = Math.max(...totals.map(([, hours]) => hours), 1);
-  return totals.length ? <div className="department-breakdown">{totals.map(([name, hours]) => <div key={name}><div><strong>{name}</strong><span>{hours.toFixed(1)} hrs</span></div><i><b style={{ width: `${(hours / max) * 100}%` }} /></i></div>)}</div> : <EmptyState title="No department overtime yet" body="Monthly department totals will appear after overtime is entered." />;
 }
 
 function WeekOverview({ dates, selectedDate, setSelectedDate, entries, overrides }: { dates: string[]; selectedDate: string; setSelectedDate: (value: string) => void; entries: OvertimeEntry[]; overrides: Override[] }) {
