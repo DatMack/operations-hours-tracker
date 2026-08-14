@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
-const [client, html, baseMigration, migration, privateHelpersMigration, companyMigration, deployWorkflow] = await Promise.all([
+const [client, html, baseMigration, migration, privateHelpersMigration, companyMigration, assignmentMigration, deployWorkflow] = await Promise.all([
   read("src/lib/supabase.ts"),
   read("index.html"),
   read("supabase/migrations/20260814000000_operations_hours_tracker.sql"),
   read("supabase/migrations/20260814010000_github_pages_auth_rls.sql"),
   read("supabase/migrations/20260814020000_private_rls_helpers.sql"),
   read("supabase/migrations/20260814030000_company_departments.sql"),
+  read("supabase/migrations/20260814040000_supervisor_assignments.sql"),
   read(".github/workflows/deploy-pages.yml"),
 ]);
 
@@ -45,6 +46,9 @@ assert.match(companyMigration, /overtime_company_fields_guard/i, "Database trigg
 assert.match(companyMigration, /already exists for this employee, date, department, and cost code/i, "Duplicate overtime must be blocked in PostgreSQL");
 assert.match(companyMigration, /overtime_quarter_hour_check/i, "Quarter-hour increments must be enforced in PostgreSQL");
 assert.match(companyMigration, /audit_departments_change/i, "Department changes must be audited");
+assert.match(assignmentMigration, /profiles_assignment_guard/i, "Supervisor assignments must be validated in PostgreSQL");
+assert.match(assignmentMigration, /department_id uuid references public\.departments/i, "Supervisor departments must use a protected foreign key");
+assert.match(assignmentMigration, /Supervisors require a department and Day or Night assignment/i, "Supervisor department and shift assignments must be required");
 assert.match(deployWorkflow, /contents: read/, "The deployment workflow must use read-only repository access");
 assert.match(deployWorkflow, /pages: write/, "The deployment workflow may write only to Pages");
 
