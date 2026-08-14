@@ -73,11 +73,12 @@ export type TrackerBundle = {
   ptoEntries: PtoEntry[];
   scheduleOverrides: Override[];
   dashboardWidgets: DashboardWidget[];
+  dashboardPersistenceReady: boolean;
   profiles: Profile[];
   auditLog: Audit[];
 };
 
-type DbError = { message: string } | null;
+type DbError = { message: string; code?: string } | null;
 type ProfileRow = { email: string; full_name: string; role: Role; active: boolean; department_id: string | null; shift_color: ShiftColor | null; shift_period: "Day" | "Night" | null; created_at: string };
 type DepartmentRow = { id: string; name: string; default_cost_code: string; active: boolean; created_at: string; updated_at: string };
 type EmployeeRow = { id: string; name: string; shift_color: ShiftColor; shift_period: "Day" | "Night"; department_id: string; department: string; active: boolean; created_at: string };
@@ -117,6 +118,12 @@ export const DEFAULT_DASHBOARD_WIDGETS: DashboardWidget[] = [
 
 function check(error: DbError, action: string) {
   if (error) throw new Error(`Supabase could not ${action}: ${error.message}`);
+}
+
+function missingDashboardPreferencesTable(error: DbError) {
+  if (!error) return false;
+  const message = error.message.toLowerCase();
+  return error.code === "PGRST205" || error.code === "42P01" || (message.includes("dashboard_preferences") && (message.includes("schema cache") || message.includes("does not exist") || message.includes("could not find")));
 }
 
 function validDate(value: unknown): value is string {
@@ -267,7 +274,8 @@ export async function loadBundle(): Promise<TrackerBundle> {
   check(departmentResult.error, "load departments");
   check(employeeResult.error, "load employees");
   check(overrideResult.error, "load schedule corrections");
-  check(dashboardResult.error, "load your dashboard layout");
+  const dashboardPersistenceReady = !dashboardResult.error;
+  if (dashboardResult.error && !missingDashboardPreferencesTable(dashboardResult.error)) check(dashboardResult.error, "load your dashboard layout");
   check(profileResult.error, "load approved users");
   check(auditResult.error, "load audit history");
 
@@ -279,7 +287,8 @@ export async function loadBundle(): Promise<TrackerBundle> {
     overtimeEntries: (overtimeRows as OvertimeRow[]).map(overtime),
     ptoEntries: (ptoRows as PtoRow[]).map(pto),
     scheduleOverrides: ((overrideResult.data ?? []) as unknown as OverrideRow[]).map(override),
-    dashboardWidgets: dashboardResult.data ? dashboardWidgets((dashboardResult.data as unknown as DashboardPreferenceRow).widgets) : DEFAULT_DASHBOARD_WIDGETS.map((widget) => ({ ...widget })),
+    dashboardWidgets: dashboardPersistenceReady && dashboardResult.data ? dashboardWidgets((dashboardResult.data as unknown as DashboardPreferenceRow).widgets) : DEFAULT_DASHBOARD_WIDGETS.map((widget) => ({ ...widget })),
+    dashboardPersistenceReady,
     profiles: ((profileResult.data ?? []) as unknown as ProfileRow[]).map(profile),
     auditLog: ((auditResult.data ?? []) as unknown as AuditRow[]).map(audit),
   };
