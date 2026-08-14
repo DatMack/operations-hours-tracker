@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import CrewPlacement from "./CrewPlacement";
 import { shiftForDate, toDateInput, type ShiftColor } from "./lib/schedule";
 import {
   loadBundle,
@@ -17,7 +18,7 @@ import {
   type TrackerBundle,
 } from "./lib/tracker-api";
 
-type Tab = "dashboard" | "overtime" | "pto" | "employees" | "calendar" | "reports" | "settings" | "companySetup" | "admin";
+type Tab = "dashboard" | "overtime" | "pto" | "employees" | "crew" | "calendar" | "reports" | "settings" | "companySetup" | "admin";
 type ColorMode = "light" | "dark" | "system";
 type ImportKind = "employees" | "history";
 type OvertimeEditor = { employee: Employee; entry?: OvertimeEntry };
@@ -36,6 +37,8 @@ const DASHBOARD_WIDGET_CATALOG: Array<{ id: DashboardWidgetId; label: string; de
   { id: "pto_type", label: "PTO by type", description: "Monthly PTO hours summarized by PTO type.", category: "Charts", defaultSize: "standard" },
   { id: "staffing_department", label: "Staffing by department", description: "Active headcount across company departments.", category: "Workforce", defaultSize: "standard" },
   { id: "staffing_crew", label: "Staffing by crew", description: "Active headcount across Blue and Yellow day/night crews.", category: "Workforce", defaultSize: "standard" },
+  { id: "placement_coverage", label: "Crew placement coverage", description: "Required line positions filled across the crews you can view.", category: "Crew placement", defaultSize: "compact" },
+  { id: "placement_gaps", label: "Open crew positions", description: "Required placement gaps summarized by department and crew.", category: "Crew placement", defaultSize: "standard" },
   { id: "schedule", label: "Next 14 days", description: "Two-week Blue and Yellow schedule forecast.", category: "Schedule", defaultSize: "wide" },
   { id: "selected_ot", label: "OT on selected date", description: "Employee-level overtime details for the selected date.", category: "Daily details", defaultSize: "standard" },
   { id: "selected_pto", label: "PTO on selected date", description: "Employee-level PTO details for the selected date.", category: "Daily details", defaultSize: "standard" },
@@ -46,6 +49,7 @@ const NAV: Array<{ id: Tab; code: string; label: string }> = [
   { id: "overtime", code: "OT", label: "Overtime Entry" },
   { id: "pto", code: "PT", label: "PTO Tracking" },
   { id: "employees", code: "EM", label: "Employees" },
+  { id: "crew", code: "CP", label: "Crew Placement" },
   { id: "calendar", code: "SC", label: "Shift Calendar" },
   { id: "reports", code: "RP", label: "Reports" },
   { id: "settings", code: "ST", label: "Settings" },
@@ -163,6 +167,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
   const [employeeColor, setEmployeeColor] = useState<"all" | ShiftColor>("all");
   const [employeePeriod, setEmployeePeriod] = useState("all");
   const [employeeStatus, setEmployeeStatus] = useState<"all" | "active" | "inactive">("active");
+  const [employeeLimit, setEmployeeLimit] = useState(10);
   const [reportStart, setReportStart] = useState(() => `${new Date().getFullYear()}-01-01`);
   const [reportEnd, setReportEnd] = useState(() => `${new Date().getFullYear()}-12-31`);
   const [reportEmployee, setReportEmployee] = useState("all");
@@ -262,6 +267,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
     const matchesStatus = employeeStatus === "all" || (employeeStatus === "active" ? employee.active : !employee.active);
     return matchesSearch && matchesDepartment && matchesColor && matchesPeriod && matchesStatus;
   });
+  const displayedEmployees = filteredEmployees.slice(0, employeeLimit);
   const costCodes = Array.from(new Set(data.overtimeEntries.map((entry) => entry.costCode))).sort();
   const reasons = Array.from(new Set(data.overtimeEntries.map((entry) => entry.reason))).sort();
   const filteredOt = data.overtimeEntries.filter((entry) => {
@@ -364,9 +370,11 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
               <label><span>Shift period</span><select value={employeePeriod} onChange={(event) => setEmployeePeriod(event.target.value)}><option value="all">Day & Night</option><option>Day</option><option>Night</option></select></label>
               <label><span>Status</span><select value={employeeStatus} onChange={(event) => setEmployeeStatus(event.target.value as "all" | "active" | "inactive")}><option value="active">Active only</option><option value="inactive">Inactive only</option><option value="all">All statuses</option></select></label>
             </section>
-            <section className="panel table-panel"><div className="panel-head padded"><div><p className="eyebrow">Directory results</p><h2>Employee list</h2></div><span className="subtle-count">Showing {filteredEmployees.length} of {data.employees.length} employees</span></div>{data.employees.length ? filteredEmployees.length ? <div className="table-wrap"><table><thead><tr><th>Employee</th><th>Department</th><th>Shift</th><th>Period</th><th>Status</th>{isAdmin && <th />}</tr></thead><tbody>{filteredEmployees.map((employee) => <tr key={employee.id} className={!employee.active ? "inactive-row" : ""}><td><div className="person-cell"><span className="avatar">{initials(employee.name)}</span><strong>{employee.name}</strong></div></td><td>{employee.department}</td><td><ShiftBadge color={employee.shiftColor} compact /></td><td>{employee.shiftPeriod}</td><td><span className={`status-pill ${employee.active ? "active" : "inactive"}`}>{employee.active ? "Active" : "Inactive"}</span></td>{isAdmin && <td><button className="text-button" onClick={() => setEditingEmployee(employee)}>Edit</button></td>}</tr>)}</tbody></table></div> : <EmptyState title="No employees match" body="Clear or change the directory filters to see more employees." /> : <EmptyState title="No employees added" body="Use Add employee or Import CSV to build the company roster." />}</section>
+            <section className="panel table-panel"><div className="panel-head padded"><div><p className="eyebrow">Directory results</p><h2>Employee list</h2></div><RosterLimitControl total={filteredEmployees.length} value={employeeLimit} onChange={setEmployeeLimit} detail={`${data.employees.length} total`} /></div>{data.employees.length ? filteredEmployees.length ? <div className="table-wrap"><table><thead><tr><th>Employee</th><th>Department</th><th>Shift</th><th>Period</th><th>Status</th>{isAdmin && <th />}</tr></thead><tbody>{displayedEmployees.map((employee) => <tr key={employee.id} className={!employee.active ? "inactive-row" : ""}><td><div className="person-cell"><span className="avatar">{initials(employee.name)}</span><strong>{employee.name}</strong></div></td><td>{employee.department}</td><td><ShiftBadge color={employee.shiftColor} compact /></td><td>{employee.shiftPeriod}</td><td><span className={`status-pill ${employee.active ? "active" : "inactive"}`}>{employee.active ? "Active" : "Inactive"}</span></td>{isAdmin && <td><button className="text-button" onClick={() => setEditingEmployee(employee)}>Edit</button></td>}</tr>)}</tbody></table></div> : <EmptyState title="No employees match" body="Clear or change the directory filters to see more employees." /> : <EmptyState title="No employees added" body="Use Add employee or Import CSV to build the company roster." />}</section>
           </>
         )}
+
+        {tab === "crew" && <CrewPlacement data={data} busy={busy} onMutate={mutate} />}
 
         {tab === "calendar" && <CalendarView monthValue={calendarMonth} setMonthValue={setCalendarMonth} overrides={data.scheduleOverrides} isAdmin={Boolean(isAdmin)} onSelect={setOverrideDate} />}
 
@@ -490,11 +498,29 @@ function DashboardPanel({ widget, eyebrow, title, action, children }: { widget: 
 function DashboardWidgetView({ widget, data, selectedDate, workingColor, activeEmployees, activeDepartments, monthOt, monthPto, selectedOt, selectedPto, employeesById, onNavigate }: { widget: DashboardWidget; data: TrackerBundle; selectedDate: string; workingColor: ShiftColor; activeEmployees: Employee[]; activeDepartments: Department[]; monthOt: OvertimeEntry[]; monthPto: PtoEntry[]; selectedOt: OvertimeEntry[]; selectedPto: PtoEntry[]; employeesById: Map<string, Employee>; onNavigate: (tab: Tab) => void }) {
   const otHours = monthOt.reduce((sum, entry) => sum + entry.hours, 0);
   const ptoHours = monthPto.reduce((sum, entry) => sum + entry.hours, 0);
+  const placementEmployees = data.session.role === "supervisor" ? activeEmployees.filter((employee) => employee.departmentId === data.session.departmentId && employee.shiftColor === data.session.shiftColor && employee.shiftPeriod === data.session.shiftPeriod) : activeEmployees;
+  const crewScopes = Array.from(new Map(placementEmployees.map((employee) => [`${employee.departmentId}|${employee.shiftColor}|${employee.shiftPeriod}`, { departmentId: employee.departmentId, department: employee.department, color: employee.shiftColor, period: employee.shiftPeriod }])).values());
+  const activeCrewSystems = data.crewSystems.filter((system) => system.active);
+  const activeCrewPositions = data.crewPositions.filter((position) => position.active && position.required && activeCrewSystems.some((system) => system.id === position.systemId));
+  const placementGapRows: Array<[string, number]> = crewScopes.map((scope) => {
+    const systemIds = new Set(activeCrewSystems.filter((system) => system.departmentId === scope.departmentId).map((system) => system.id));
+    const positionIds = new Set(activeCrewPositions.filter((position) => systemIds.has(position.systemId)).map((position) => position.id));
+    const filled = data.crewPlacements.filter((placement) => placement.shiftColor === scope.color && placement.shiftPeriod === scope.period && positionIds.has(placement.positionId)).length;
+    return [`${scope.department} · ${scope.color} ${scope.period}`, Math.max(0, positionIds.size - filled)] as [string, number];
+  }).filter(([, gaps]) => gaps > 0);
+  const totalRequiredPositions = crewScopes.reduce((sum, scope) => {
+    const systemIds = new Set(activeCrewSystems.filter((system) => system.departmentId === scope.departmentId).map((system) => system.id));
+    return sum + activeCrewPositions.filter((position) => systemIds.has(position.systemId)).length;
+  }, 0);
+  const totalPlacementGaps = placementGapRows.reduce((sum, [, gaps]) => sum + gaps, 0);
+  const totalFilledPositions = Math.max(0, totalRequiredPositions - totalPlacementGaps);
 
   if (widget.id === "kpi_ot") return <DashboardMetric widget={widget} label="Overtime this month" value={otHours.toFixed(1)} unit="hrs" detail={`${monthOt.length} entries`} />;
   if (widget.id === "kpi_pto") return <DashboardMetric widget={widget} label="PTO this month" value={ptoHours.toFixed(1)} unit="hrs" detail={`${monthPto.length} entries`} />;
   if (widget.id === "kpi_employees") return <DashboardMetric widget={widget} label="Active employees" value={activeEmployees.length} detail={`${activeDepartments.length} active departments`} />;
   if (widget.id === "kpi_ot_people") return <DashboardMetric widget={widget} label="Employees with OT" value={new Set(monthOt.map((entry) => entry.employeeId)).size} detail={`${monthOt.length ? (otHours / monthOt.length).toFixed(1) : "0.0"} average hrs per entry`} />;
+  if (widget.id === "placement_coverage") return <DashboardMetric widget={widget} label="Required positions filled" value={totalFilledPositions} detail={`${totalPlacementGaps} open of ${totalRequiredPositions} configured spots`} />;
+  if (widget.id === "placement_gaps") return <DashboardPanel widget={widget} eyebrow="Crew placement" title="Open required positions" action={<button className="text-button" onClick={() => onNavigate("crew")}>Open rosters →</button>}><DashboardBars rows={placementGapRows} unit="open" /></DashboardPanel>;
 
   if (widget.id === "shift_today") {
     const scheduledEmployees = activeEmployees.filter((employee) => employee.shiftColor === workingColor);
