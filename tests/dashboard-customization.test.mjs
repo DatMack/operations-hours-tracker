@@ -14,10 +14,13 @@ test("dashboard layouts are personal, validated, and available to every approved
   assert.match(api, /action === "save_dashboard_layout"/);
   assert.match(api, /dashboardWidgets\(payload\.widgets\)/, "Widget IDs and sizes must be validated before persistence");
   assert.match(api, /user_id: session\.userId/, "Layouts must be saved under the authenticated user ID");
+  assert.match(api, /missingDashboardPreferencesTable\(dashboardResult\.error\)/, "A missing preference table must fall back instead of blocking the tracker");
+  assert.match(api, /DEFAULT_DASHBOARD_WIDGETS\.map/, "Every account needs the company default dashboard when no personal layout exists");
   assert.doesNotMatch(api, /save_dashboard_layout[\s\S]{0,200}requireAdmin/, "Viewers and supervisors must be allowed to save their own layout");
   assert.match(app, /Customize dashboard/);
   assert.match(app, /Save my dashboard/);
   assert.match(app, /Viewer accounts used by management/);
+  assert.match(app, /Default dashboard active/);
   assert.match(migration, /force row level security/i);
   assert.match(migration, /auth\.uid\(\) = user_id[\s\S]*private\.tracker_is_approved\(\)/i);
 });
