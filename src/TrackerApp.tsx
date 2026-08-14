@@ -17,7 +17,8 @@ import {
   type TrackerBundle,
 } from "./lib/tracker-api";
 
-type Tab = "dashboard" | "overtime" | "pto" | "employees" | "calendar" | "reports" | "settings" | "admin";
+type Tab = "dashboard" | "overtime" | "pto" | "employees" | "calendar" | "reports" | "settings" | "companySetup" | "admin";
+type ColorMode = "light" | "dark" | "system";
 type ImportKind = "employees" | "history";
 type OvertimeEditor = { employee: Employee; entry?: OvertimeEntry };
 
@@ -47,7 +48,8 @@ const NAV: Array<{ id: Tab; code: string; label: string }> = [
   { id: "employees", code: "EM", label: "Employees" },
   { id: "calendar", code: "SC", label: "Shift Calendar" },
   { id: "reports", code: "RP", label: "Reports" },
-  { id: "settings", code: "ST", label: "Company Setup" },
+  { id: "settings", code: "ST", label: "Settings" },
+  { id: "companySetup", code: "CS", label: "Company Setup" },
   { id: "admin", code: "AD", label: "Admin" },
 ];
 
@@ -167,6 +169,10 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
   const [reportShift, setReportShift] = useState("all");
   const [reportCostCode, setReportCostCode] = useState("all");
   const [reportReason, setReportReason] = useState("all");
+  const [colorMode, setColorMode] = useState<ColorMode>(() => (localStorage.getItem("operations-hours-color-mode") as ColorMode) || "system");
+  const resolvedColorMode = colorMode === "system" ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : colorMode;
+
+  useEffect(() => { localStorage.setItem("operations-hours-color-mode", colorMode); }, [colorMode]);
 
   async function load() {
     try {
@@ -218,7 +224,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
   const workingColor = data ? shiftForDate(selectedDate, data.scheduleOverrides) : "Blue";
   const canWrite = data?.session.role === "admin" || data?.session.role === "supervisor";
   const isAdmin = data?.session.role === "admin";
-  const visibleNav = NAV.filter((item) => (item.id !== "admin" && item.id !== "settings") || isAdmin);
+  const visibleNav = NAV.filter((item) => (item.id !== "admin" && item.id !== "companySetup") || isAdmin);
 
   if (!data) {
     return (
@@ -302,7 +308,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell theme-${resolvedColorMode}`}>
       <header className="topbar">
         <div className="brand"><div className="brand-box">OT</div><div><strong>Overtime & PTO</strong><span>Company operations tracker · Supabase</span></div></div>
         <div className="account"><span className="status-dot" /><div><strong>{data.session.fullName}</strong><span>{data.session.role}{data.session.role === "supervisor" ? ` · ${data.departments.find((department) => department.id === data.session.departmentId)?.name ?? "Unassigned"} · ${data.session.shiftColor ?? "Unassigned"} ${data.session.shiftPeriod ?? ""}`.trimEnd() : ""}</span></div><button className="signout-button" onClick={() => void onSignOut()}>Sign out</button></div>
@@ -318,7 +324,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
         {tab === "dashboard" && (
           <>
             <div className="page-heading"><div><p className="eyebrow">Your operations workspace</p><h1>Dashboard</h1><span>{prettyDate(selectedDate)} · {data.dashboardPersistenceReady ? `Saved personally for ${data.session.fullName}` : "Using the company default layout"}</span></div><div className="dashboard-heading-actions"><label className="date-control"><span>View date</span><input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label><button className="secondary-button" disabled={!data.dashboardPersistenceReady} title={data.dashboardPersistenceReady ? undefined : "Personal dashboard storage is still being configured."} onClick={() => setCustomizingDashboard(true)}>{data.dashboardPersistenceReady ? "Customize dashboard" : "Default dashboard active"}</button></div></div>
-            {!activeEmployees.length && <section className="setup-banner"><div><span className="setup-number">1</span><div><strong>Your tracker is clean and ready</strong><span>Confirm departments, then add employees individually or import the complete roster.</span></div></div><div className="button-row">{isAdmin && <button className="secondary-button" onClick={() => setTab("settings")}>Review departments</button>}<button className="primary-button" onClick={() => setTab("employees")}>Add employees</button></div></section>}
+            {!activeEmployees.length && <section className="setup-banner"><div><span className="setup-number">1</span><div><strong>Your tracker is clean and ready</strong><span>Confirm departments, then add employees individually or import the complete roster.</span></div></div><div className="button-row">{isAdmin && <button className="secondary-button" onClick={() => setTab("companySetup")}>Review departments</button>}<button className="primary-button" onClick={() => setTab("employees")}>Add employees</button></div></section>}
             {data.dashboardWidgets.length ? <section className="dashboard-widget-grid">{data.dashboardWidgets.map((widget) => <DashboardWidgetView key={widget.id} widget={widget} data={data} selectedDate={selectedDate} workingColor={workingColor} activeEmployees={activeEmployees} activeDepartments={activeDepartments} monthOt={monthOt} monthPto={monthPto} selectedOt={selectedOt} selectedPto={selectedPto} employeesById={employeesById} onNavigate={setTab} />)}</section> : <section className="panel dashboard-empty"><EmptyState title="Your dashboard is empty" body="Choose Customize dashboard to add the metrics, charts, and daily details you want to see." /><button className="primary-button" onClick={() => setCustomizingDashboard(true)}>Add dashboard widgets</button></section>}
           </>
         )}
@@ -380,7 +386,17 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
           </>
         )}
 
-        {tab === "settings" && isAdmin && (
+        {tab === "settings" && (
+          <>
+            <div className="page-heading"><div><p className="eyebrow">Your workspace</p><h1>Settings</h1><span>Personalize how the tracker looks and behaves for you.</span></div></div>
+            <section className="settings-grid">
+              <div className="panel settings-panel"><div className="panel-head"><div><p className="eyebrow">Appearance</p><h2>Color mode</h2></div></div><div className="settings-panel-body"><p>Choose the appearance that is easiest on your eyes. This setting is saved on this device.</p><div className="appearance-options" role="radiogroup" aria-label="Color mode">{(["light", "dark", "system"] as ColorMode[]).map((mode) => <button key={mode} type="button" className={colorMode === mode ? "selected" : ""} onClick={() => setColorMode(mode)} role="radio" aria-checked={colorMode === mode}><span className={`appearance-preview ${mode}`}><i /></span><strong>{mode === "system" ? "Use device setting" : `${mode[0].toUpperCase()}${mode.slice(1)} mode`}</strong><small>{mode === "system" ? "Follows your computer or phone" : mode === "dark" ? "Lower-light workspace" : "Bright, clean workspace"}</small></button>)}</div></div></div>
+              <div className="panel settings-panel"><div className="panel-head"><div><p className="eyebrow">Dashboard</p><h2>Dashboard preferences</h2></div></div><div className="settings-panel-body"><p>Your dashboard already has its own Customize dashboard button. It is where you choose the cards and charts you want to see and save the layout to your account.</p><div className="settings-note"><span>✓</span><div><strong>Default dashboard is active</strong><small>Use the button at the top of Dashboard to personalize your view whenever dashboard storage is ready.</small></div></div></div></div>
+            </section>
+          </>
+        )}
+
+        {tab === "companySetup" && isAdmin && (
           <>
             <div className="page-heading"><div><p className="eyebrow">Company configuration</p><h1>Departments & Cost Codes</h1><span>These defaults drive employee setup, overtime entry, and reporting.</span></div><button className="primary-button" onClick={() => setEditingDepartment({ id: "", name: "", defaultCostCode: "", active: true })}>+ Add department</button></div>
             <section className="panel table-panel">{data.departments.length ? <div className="table-wrap"><table><thead><tr><th>Department</th><th>Default cost code</th><th>Active employees</th><th>Status</th><th /></tr></thead><tbody>{data.departments.map((department) => { const count = activeEmployees.filter((employee) => employee.departmentId === department.id).length; return <tr key={department.id} className={!department.active ? "inactive-row" : ""}><td><strong>{department.name}</strong></td><td><span className="code-pill">{department.defaultCostCode}</span></td><td>{count}</td><td><span className={`status-pill ${department.active ? "active" : "inactive"}`}>{department.active ? "Active" : "Inactive"}</span></td><td><button className="text-button" onClick={() => setEditingDepartment(department)}>Edit</button></td></tr>; })}</tbody></table></div> : <EmptyState title="No departments configured" body="Add the first company department and its default cost code." />}</section>
