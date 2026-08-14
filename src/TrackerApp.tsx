@@ -8,6 +8,7 @@ import {
   type Employee,
   type OvertimeEntry,
   type Override,
+  type Profile,
   type PtoEntry,
   type TrackerBundle,
 } from "./lib/tracker-api";
@@ -103,6 +104,8 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
   const [overrideDate, setOverrideDate] = useState<string | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null);
+  const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
+  const [addingProfile, setAddingProfile] = useState(false);
   const [importKind, setImportKind] = useState<ImportKind | null>(null);
   const [rosterSearch, setRosterSearch] = useState("");
   const [rosterDepartment, setRosterDepartment] = useState("all");
@@ -369,7 +372,23 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
           <>
             <div className="page-heading"><div><p className="eyebrow">Protected access</p><h1>Administration</h1><span>Approve users, assign roles, and review recent changes.</span></div></div>
             <section className="two-column admin-columns">
-              <div className="panel"><div className="panel-head"><div><p className="eyebrow">User access</p><h2>Approved accounts</h2></div></div><div className="profile-list">{data.profiles.map((profile) => <div key={profile.email}><span className="avatar">{initials(profile.fullName)}</span><div><strong>{profile.fullName}</strong><small>{profile.email}{profile.role === "supervisor" ? ` · ${data.departments.find((department) => department.id === profile.departmentId)?.name ?? "Unassigned"} · ${profile.shiftColor ?? "Unassigned"} ${profile.shiftPeriod ?? ""}`.trimEnd() : ""}</small></div><span className="role-pill">{profile.role}</span><span className={`status-pill ${profile.active ? "active" : "inactive"}`}>{profile.active ? "Active" : "Inactive"}</span></div>)}</div><details className="add-user"><summary>+ Add or update a user</summary><form onSubmit={async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const ok = await mutate({ action: "upsert_profile", fullName: form.get("fullName"), email: form.get("email"), role: form.get("role"), departmentId: form.get("departmentId"), shiftColor: form.get("shiftColor"), shiftPeriod: form.get("shiftPeriod"), active: form.get("active") === "on" }, "User access saved."); if (ok) event.currentTarget.reset(); }}><label><span>Full name</span><input name="fullName" required /></label><label><span>Email</span><input type="email" name="email" required /></label><label><span>Role</span><select name="role" defaultValue="supervisor"><option value="supervisor">Supervisor</option><option value="viewer">Viewer</option><option value="admin">Admin</option></select></label><label><span>Supervisor department</span><select name="departmentId" defaultValue={activeDepartments[0]?.id}>{activeDepartments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select></label><div className="form-grid"><label><span>Supervisor shift color</span><select name="shiftColor" defaultValue="Blue"><option>Blue</option><option>Yellow</option></select></label><label><span>Supervisor period</span><select name="shiftPeriod" defaultValue="Day"><option>Day</option><option>Night</option></select></label></div><small className="form-help">Department, shift color, and period are required when the role is Supervisor.</small><label className="checkbox-label"><input type="checkbox" name="active" defaultChecked /><span>Active account</span></label><button className="primary-button" disabled={busy}>Save user</button></form></details></div>
+              <div className="panel">
+                <div className="panel-head"><div><p className="eyebrow">User access</p><h2>Approved accounts</h2></div><span className="subtle-count">Select a person to manage</span></div>
+                {data.profiles.length ? (
+                  <div className="profile-list">
+                    {data.profiles.map((profile) => (
+                      <button type="button" className="profile-row" key={profile.email} onClick={() => setEditingProfile(profile)}>
+                        <span className="avatar">{initials(profile.fullName)}</span>
+                        <span className="profile-copy"><strong>{profile.fullName}</strong><small>{profile.email}{profile.role === "supervisor" ? ` · ${data.departments.find((department) => department.id === profile.departmentId)?.name ?? "Unassigned"} · ${profile.shiftColor ?? "Unassigned"} ${profile.shiftPeriod ?? ""}`.trimEnd() : ""}</small></span>
+                        <span className="role-pill">{profile.role}</span>
+                        <span className={`status-pill ${profile.active ? "active" : "inactive"}`}>{profile.active ? "Active" : "Inactive"}</span>
+                        <span className="profile-edit-mark">Edit</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : <EmptyState title="No approved accounts" body="Add the first approved person below." />}
+                <div className="profile-list-footer"><button type="button" className="primary-button full" onClick={() => setAddingProfile(true)}>+ Add new person</button></div>
+              </div>
               <div className="panel"><div className="panel-head"><div><p className="eyebrow">Audit history</p><h2>Recent changes</h2></div></div><div className="audit-list">{data.auditLog.length ? data.auditLog.slice(0, 20).map((item) => <div key={item.id}><span className="audit-dot" /><div><strong>{item.action} {item.entityType.replaceAll("_", " ")}</strong><small>{item.userEmail} · {timestampDate(item.createdAt).toLocaleString()}</small></div></div>) : <EmptyState title="No changes yet" body="Administrative and entry changes will be recorded here." />}</div></div>
             </section>
             <section className="security-strip"><div className="lock-mark">✓</div><div><strong>Company pilot protections</strong><span>Supabase login, approved roles, forced row-level security, database validation, historical snapshots, and tamper-resistant audit history are enabled.</span></div></section>
@@ -382,6 +401,8 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
       {overrideDate && <Modal title="Correct scheduled shift" onClose={() => setOverrideDate(null)}><OverrideForm date={overrideDate} current={shiftForDate(overrideDate, data.scheduleOverrides)} override={data.scheduleOverrides.find((item) => item.workDate === overrideDate)} busy={busy} onSave={async (values) => { const ok = await mutate({ action: "set_override", workDate: overrideDate, ...values }, "Schedule correction saved."); if (ok) setOverrideDate(null); }} onRemove={async () => { const ok = await mutate({ action: "delete_override", workDate: overrideDate }, "Schedule correction removed."); if (ok) setOverrideDate(null); }} /></Modal>}
       {editingEmployee && <Modal title={editingEmployee.id ? "Edit employee" : "Add employee"} onClose={() => setEditingEmployee(null)}><EmployeeForm employee={editingEmployee} departments={data.departments} busy={busy} onSave={async (values) => { const ok = await mutate({ action: editingEmployee.id ? "update_employee" : "add_employee", id: editingEmployee.id, ...values }, editingEmployee.id ? "Employee updated." : "Employee added."); if (ok) setEditingEmployee(null); }} /></Modal>}
       {editingDepartment && <Modal title={editingDepartment.id ? "Edit department" : "Add department"} onClose={() => setEditingDepartment(null)}><DepartmentForm department={editingDepartment} activeEmployeeCount={activeEmployees.filter((employee) => employee.departmentId === editingDepartment.id).length} busy={busy} onSave={async (values) => { const ok = await mutate({ action: editingDepartment.id ? "update_department" : "add_department", id: editingDepartment.id, ...values }, editingDepartment.id ? "Department updated." : "Department added."); if (ok) setEditingDepartment(null); }} /></Modal>}
+      {editingProfile && <Modal title="Update user access" onClose={() => setEditingProfile(null)}><ProfileForm profile={editingProfile} departments={data.departments} busy={busy} currentUserEmail={data.session.email} onSave={async (values) => { const ok = await mutate({ action: "update_profile", originalEmail: editingProfile.email, ...values }, "User access updated."); if (ok) setEditingProfile(null); }} onDelete={async () => { const ok = await mutate({ action: "delete_profile", email: editingProfile.email }, "User access deleted."); if (ok) setEditingProfile(null); }} /></Modal>}
+      {addingProfile && <Modal title="Add new person" onClose={() => setAddingProfile(false)}><ProfileForm departments={data.departments} busy={busy} currentUserEmail={data.session.email} onSave={async (values) => { const ok = await mutate({ action: "add_profile", ...values }, "New user access added."); if (ok) setAddingProfile(false); }} /></Modal>}
       {importKind && <Modal title={importKind === "employees" ? "Import employee roster" : "Import overtime & PTO history"} onClose={() => setImportKind(null)}><ImportForm kind={importKind} busy={busy} onImport={async (rows) => { const ok = await mutate({ action: importKind === "employees" ? "import_employees" : "import_history", rows }, importKind === "employees" ? "Employee roster imported." : "Historical records imported."); if (ok) setImportKind(null); }} /></Modal>}
     </div>
   );
@@ -414,6 +435,29 @@ function EmployeeForm({ employee, departments, busy, onSave }: { employee: Emplo
 
 function DepartmentForm({ department, activeEmployeeCount, busy, onSave }: { department: Department; activeEmployeeCount: number; busy: boolean; onSave: (values: Record<string, unknown>) => Promise<void> }) {
   return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const active = activeEmployeeCount > 0 && department.active ? true : form.get("active") === "on"; void onSave({ name: form.get("name"), defaultCostCode: form.get("defaultCostCode"), active }); }}><p className="modal-copy">The default cost code fills automatically when this department is selected for overtime. Supervisors can still enter a different code when needed.</p><label><span>Department name</span><input name="name" defaultValue={department.name} maxLength={100} required autoFocus /></label><label><span>Default cost code</span><input name="defaultCostCode" defaultValue={department.defaultCostCode} maxLength={50} placeholder="Example: EXT-100" required /></label><label className="checkbox-label"><input type="checkbox" name="active" defaultChecked={department.active} disabled={activeEmployeeCount > 0 && department.active} /><span>Active department{activeEmployeeCount > 0 && department.active ? ` · ${activeEmployeeCount} active employees must be moved or deactivated first` : ""}</span></label><div className="privacy-note"><strong>Historical records are protected</strong><span>Renaming this department updates current employee assignments. Existing overtime keeps its original department snapshot.</span></div><button className="primary-button full" disabled={busy}>{busy ? "Saving…" : "Save department"}</button></form>;
+}
+
+function ProfileForm({ profile, departments, busy, currentUserEmail, onSave, onDelete }: { profile?: Profile; departments: Department[]; busy: boolean; currentUserEmail: string; onSave: (values: Record<string, unknown>) => Promise<void>; onDelete?: () => Promise<void> }) {
+  const [role, setRole] = useState(profile?.role ?? "supervisor");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const selectableDepartments = departments.filter((department) => department.active || department.id === profile?.departmentId);
+  const currentUser = profile?.email === currentUserEmail;
+
+  return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); void onSave({ fullName: form.get("fullName"), email: form.get("email"), role, departmentId: role === "supervisor" ? form.get("departmentId") : null, shiftColor: role === "supervisor" ? form.get("shiftColor") : null, shiftPeriod: role === "supervisor" ? form.get("shiftPeriod") : null, active: form.get("active") === "on" }); }}>
+    <label><span>Full name</span><input name="fullName" defaultValue={profile?.fullName ?? ""} maxLength={100} required autoFocus /></label>
+    <label><span>Email</span><input type="email" name="email" defaultValue={profile?.email ?? ""} maxLength={160} required /></label>
+    <label><span>Role</span><select name="role" value={role} onChange={(event) => setRole(event.target.value as Profile["role"])}><option value="supervisor">Supervisor</option><option value="viewer">Viewer</option><option value="admin">Admin</option></select></label>
+    {role === "supervisor" && <>
+      <label><span>Supervisor department</span><select name="departmentId" defaultValue={profile?.departmentId ?? selectableDepartments[0]?.id} required>{selectableDepartments.map((department) => <option key={department.id} value={department.id}>{department.name}{department.active ? "" : " (inactive)"}</option>)}</select></label>
+      <div className="form-grid"><label><span>Supervisor shift color</span><select name="shiftColor" defaultValue={profile?.shiftColor ?? "Blue"}><option>Blue</option><option>Yellow</option></select></label><label><span>Supervisor period</span><select name="shiftPeriod" defaultValue={profile?.shiftPeriod ?? "Day"}><option>Day</option><option>Night</option></select></label></div>
+      <small className="form-help">Department, shift color, and period are required for supervisors.</small>
+    </>}
+    <label className="checkbox-label"><input type="checkbox" name="active" defaultChecked={profile?.active ?? true} /><span>Active account</span></label>
+    <div className="privacy-note"><strong>{profile ? "Email updates replace this selected record" : "Supabase Authentication is still required"}</strong><span>{profile ? "Changing this email will not create a duplicate tracker profile. The user's Supabase Authentication email must also match before they can sign in." : "Create or invite the matching Supabase Authentication user with this exact email."}</span></div>
+    {confirmDelete && <div className="delete-confirm"><strong>Delete tracker access for {profile?.fullName}?</strong><span>This removes the approved tracker profile and records the deletion in Audit history. It does not delete the person's Supabase Authentication account.</span><div className="button-row"><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirmDelete(false)}>Cancel</button><button type="button" className="danger-button" disabled={busy} onClick={() => void onDelete?.()}>{busy ? "Deleting…" : "Confirm delete"}</button></div></div>}
+    {!confirmDelete && <div className="button-row">{profile && onDelete && <button type="button" className="danger-button" disabled={busy || currentUser} title={currentUser ? "You cannot delete the account currently signed in." : undefined} onClick={() => setConfirmDelete(true)}>Delete user access</button>}<button className="primary-button" disabled={busy || (role === "supervisor" && !selectableDepartments.length)}>{busy ? "Saving…" : profile ? "Update user" : "Add person"}</button></div>}
+    {currentUser && <small className="form-help">Your currently signed-in administrator account cannot be deleted from its own session.</small>}
+  </form>;
 }
 
 function normalizeDateValue(value: string) {
