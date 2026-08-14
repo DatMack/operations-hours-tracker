@@ -487,3 +487,6 @@ html:has(.theme-dark), body:has(.theme-dark) { background: #091923; }
 @media (max-width: 520px) {
   .scheduled-departments > div { grid-template-columns: 1fr; }
 }
+
+.roster-expand { padding: 0 18px 18px; display: flex; justify-content: center; }
+.roster-expand .secondary-button { min-width: 190px; }
