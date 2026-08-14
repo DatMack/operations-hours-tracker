@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
-const [client, html, migration, deployWorkflow] = await Promise.all([
+const [client, html, migration, privateHelpersMigration, deployWorkflow] = await Promise.all([
   read("src/lib/supabase.ts"),
   read("index.html"),
   read("supabase/migrations/20260814010000_github_pages_auth_rls.sql"),
+  read("supabase/migrations/20260814020000_private_rls_helpers.sql"),
   read(".github/workflows/deploy-pages.yml"),
 ]);
 
@@ -23,6 +24,11 @@ for (const table of ["profiles", "employees", "overtime_entries", "pto_entries",
 assert.match(migration, /overtime_schedule_guard/i, "Overtime schedule rules must be enforced in PostgreSQL");
 assert.match(migration, /profiles_last_admin_guard/i, "The final active administrator must be protected");
 assert.match(migration, /audit_.*_change/i, "Data changes must be audited by database triggers");
+assert.match(privateHelpersMigration, /create schema if not exists private/i, "RLS helper functions must live in a non-exposed schema");
+for (const helper of ["current_user_email", "current_user_role", "tracker_is_approved", "tracker_can_write", "tracker_is_admin"]) {
+  assert.match(privateHelpersMigration, new RegExp(`alter function public\\.${helper}\\(\\) set schema private`, "i"), `${helper} must be removed from the API-exposed public schema`);
+  assert.match(privateHelpersMigration, new RegExp(`revoke all on function private\\.${helper}\\(\\) from public, anon`, "i"), `${helper} must reject anonymous execution`);
+}
 assert.match(deployWorkflow, /contents: read/, "The deployment workflow must use read-only repository access");
 assert.match(deployWorkflow, /pages: write/, "The deployment workflow may write only to Pages");
 
