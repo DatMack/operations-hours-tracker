@@ -12,6 +12,18 @@ A private, role-based overtime, PTO, employee, and 2-2-3 shift tracking app for 
 
 The Supabase **publishable** key is intentionally used by the browser. It is not a password; RLS protects the data. Never add a Supabase secret key or service-role key to this repository or to browser code.
 
+## Security controls
+
+- No anonymous table access; approved Supabase Auth users only.
+- PostgreSQL-enforced admin, supervisor, and viewer permissions.
+- Database validation prevents scheduled-shift overtime outside the UI.
+- Database-triggered, administrator-only audit history.
+- Protection against disabling the last active administrator.
+- 30-minute browser inactivity timeout and a restrictive Content Security Policy.
+- Automated typechecking, tests, secret checks, dependency audit, CodeQL scanning, and Dependabot updates.
+
+Do not import real employee information until every item in `SECURITY_CHECKLIST.md` has been verified.
+
 ## First deployment
 
 1. In Supabase SQL Editor, run `supabase/migrations/20260814010000_github_pages_auth_rls.sql`.

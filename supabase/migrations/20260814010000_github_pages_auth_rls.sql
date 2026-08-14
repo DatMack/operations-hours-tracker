@@ -83,13 +83,34 @@ grant select, insert, update, delete on table public.schedule_overrides to authe
 grant select on table public.audit_log to authenticated;
 grant select, insert, update, delete on table public.app_settings to authenticated;
 
+alter table public.profiles force row level security;
+alter table public.employees force row level security;
+alter table public.overtime_entries force row level security;
+alter table public.pto_entries force row level security;
+alter table public.schedule_overrides force row level security;
+alter table public.audit_log force row level security;
+alter table public.app_settings force row level security;
+
+alter table public.profiles drop constraint if exists profiles_email_length_check;
+alter table public.profiles add constraint profiles_email_length_check check (char_length(email) between 3 and 254 and position('@' in email) > 1);
+alter table public.profiles drop constraint if exists profiles_full_name_length_check;
+alter table public.profiles add constraint profiles_full_name_length_check check (char_length(full_name) between 1 and 100);
+alter table public.employees drop constraint if exists employees_text_length_check;
+alter table public.employees add constraint employees_text_length_check check (char_length(name) between 1 and 100 and char_length(department) between 1 and 100);
+alter table public.overtime_entries drop constraint if exists overtime_text_length_check;
+alter table public.overtime_entries add constraint overtime_text_length_check check (char_length(cost_code) between 1 and 50 and char_length(notes) <= 500 and char_length(entered_by) between 3 and 254);
+alter table public.pto_entries drop constraint if exists pto_text_length_check;
+alter table public.pto_entries add constraint pto_text_length_check check (char_length(pto_type) between 1 and 50 and char_length(notes) <= 500 and char_length(entered_by) between 3 and 254);
+alter table public.schedule_overrides drop constraint if exists overrides_text_length_check;
+alter table public.schedule_overrides add constraint overrides_text_length_check check (char_length(reason) <= 250 and char_length(updated_by) between 3 and 254);
+
 drop policy if exists profiles_select_approved on public.profiles;
 drop policy if exists profiles_admin_insert on public.profiles;
 drop policy if exists profiles_admin_update on public.profiles;
 create policy profiles_select_approved on public.profiles
   for select to authenticated
   using (
-    (active = true and lower(email) = public.current_user_email())
+    lower(email) = public.current_user_email()
     or public.tracker_is_admin()
   );
 create policy profiles_admin_insert on public.profiles
@@ -221,6 +242,33 @@ create trigger overtime_schedule_guard
   before insert or update on public.overtime_entries
   for each row execute function public.validate_overtime_schedule();
 
+create or replace function public.prevent_last_active_admin()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if old.role = 'admin' and old.active = true
+     and (tg_op = 'DELETE' or new.role <> 'admin' or new.active <> true)
+     and not exists (
+       select 1 from public.profiles p
+       where lower(p.email) <> lower(old.email)
+         and p.role = 'admin'
+         and p.active = true
+     ) then
+    raise exception 'At least one active administrator is required.';
+  end if;
+  if tg_op = 'DELETE' then return old; end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_last_admin_guard on public.profiles;
+create trigger profiles_last_admin_guard
+  before update or delete on public.profiles
+  for each row execute function public.prevent_last_active_admin();
+
 -- Audit rows are written by database triggers. Browser users can read them only
 -- as administrators and cannot edit or delete them.
 create or replace function public.log_tracker_change()
@@ -249,6 +297,7 @@ $$;
 
 revoke all on function public.base_shift_for_date(date) from public, anon, authenticated;
 revoke all on function public.validate_overtime_schedule() from public, anon, authenticated;
+revoke all on function public.prevent_last_active_admin() from public, anon, authenticated;
 revoke all on function public.log_tracker_change() from public, anon, authenticated;
 
 drop trigger if exists audit_profiles_change on public.profiles;

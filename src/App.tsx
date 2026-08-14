@@ -3,6 +3,8 @@ import type { Session } from "@supabase/supabase-js";
 import TrackerApp from "./TrackerApp";
 import { supabase } from "./lib/supabase";
 
+const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000;
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
@@ -18,6 +20,21 @@ export default function App() {
     });
     return () => data.subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    let inactivityTimer = window.setTimeout(() => void supabase.auth.signOut({ scope: "local" }), INACTIVITY_TIMEOUT_MS);
+    const resetTimer = () => {
+      window.clearTimeout(inactivityTimer);
+      inactivityTimer = window.setTimeout(() => void supabase.auth.signOut({ scope: "local" }), INACTIVITY_TIMEOUT_MS);
+    };
+    const events: Array<keyof WindowEventMap> = ["pointerdown", "keydown", "touchstart"];
+    events.forEach((eventName) => window.addEventListener(eventName, resetTimer, { passive: true }));
+    return () => {
+      window.clearTimeout(inactivityTimer);
+      events.forEach((eventName) => window.removeEventListener(eventName, resetTimer));
+    };
+  }, [session]);
 
   if (!ready) return <AuthLoading />;
   if (!session) return <LoginScreen />;
@@ -81,7 +98,7 @@ function LoginScreen() {
         </form>
         <div className="privacy-note">
           <strong>Approved access only</strong>
-          <span>Accounts are created by the tracker administrator. Employee information is protected by Supabase authentication and database security policies.</span>
+          <span>Accounts are created by the tracker administrator. Employee information is protected by Supabase authentication and database security policies. Inactive sessions sign out after 30 minutes.</span>
         </div>
       </section>
     </main>
