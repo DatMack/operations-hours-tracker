@@ -443,3 +443,7 @@ html:has(.theme-dark), body:has(.theme-dark) { background: #091923; }
 .theme-dark .working-pill, .theme-dark .status-pill, .theme-dark .role-pill { color: #d4e2e8; background: #294352; }
 .theme-dark .employee-card.scheduled { background: #17303f; }
 .theme-dark .code-pill { color: #94e5df; background: #153b43; }
+
+.theme-dark .profile-list strong, .theme-dark .audit-list strong, .theme-dark .profile-row strong { color: #edf7fb; }
+.theme-dark .profile-list small, .theme-dark .audit-list small, .theme-dark .profile-row small { color: #c1d3dc; }
+.theme-dark .profile-edit-mark, .theme-dark .text-button { color: #73d9d3; }
