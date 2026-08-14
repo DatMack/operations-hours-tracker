@@ -24,10 +24,11 @@ test("crew placement data is persistent, crew-specific, audited, and protected b
 });
 
 test("crew placement UI separates focused supervisor editing from company-wide viewing", async () => {
-  const [app, crew, api] = await Promise.all([
+  const [app, crew, api, styles] = await Promise.all([
     read("src/TrackerApp.tsx"),
     read("src/CrewPlacement.tsx"),
     read("src/lib/tracker-api.ts"),
+    read("src/styles.css"),
   ]);
 
   assert.match(app, /id: "crew", code: "CP", label: "Crew Placement"/);
@@ -40,6 +41,7 @@ test("crew placement UI separates focused supervisor editing from company-wide v
   assert.match(api, /action === "assign_crew_position"/);
   assert.match(api, /action === "clear_crew_placement"/);
   assert.match(api, /session\.departmentId !== selectedEmployee\.department_id[\s\S]*session\.shiftColor !== selectedEmployee\.shift_color[\s\S]*session\.shiftPeriod !== selectedEmployee\.shift_period/);
+  assert.match(styles, /\.theme-dark \.crew-empty strong[\s\S]*color: #edf7fb/, "Empty roster headings must remain readable in dark mode");
 });
 
 test("crew coverage widgets and employee row-limit slider are available but optional", async () => {
