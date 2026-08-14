@@ -429,3 +429,17 @@ html:has(.theme-dark), body:has(.theme-dark) { background: #091923; }
 .theme-dark .topbar { background: #071923; }
 .theme-dark .page-heading h1 { color: #eef8ff; }
 .theme-dark .page-heading > div > span { color: #b7c9d4; }
+
+
+/* Dark-mode contrast pass for schedules, records, and secondary detail. */
+.theme-dark .schedule-banner { border-color: #275970; background: #102c3d; }
+.theme-dark .schedule-banner strong, .theme-dark .schedule-banner > span { color: #d6e6ee; }
+.theme-dark .schedule-banner .shift-badge.blue { color: #8dcdf7; background: #123b57; }
+.theme-dark .schedule-banner .shift-badge.blue i { background: #54b6ed; }
+.theme-dark td { color: #c6d6de; }
+.theme-dark th { color: #a9bdc9; }
+.theme-dark .department-breakdown strong, .theme-dark .employee-card > div strong, .theme-dark .profile-copy strong { color: #edf7fb; }
+.theme-dark .department-breakdown span, .theme-dark .employee-main > div > span, .theme-dark .notes-cell { color: #b5c9d3; }
+.theme-dark .working-pill, .theme-dark .status-pill, .theme-dark .role-pill { color: #d4e2e8; background: #294352; }
+.theme-dark .employee-card.scheduled { background: #17303f; }
+.theme-dark .code-pill { color: #94e5df; background: #153b43; }
