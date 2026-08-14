@@ -576,6 +576,7 @@ html:has(.theme-dark), body:has(.theme-dark) { background: #091923; }
 .theme-dark .crew-open-slot { border-color: #476071; }
 .theme-dark .crew-person strong, .theme-dark .crew-history-list strong, .theme-dark .crew-summary-grid strong { color: #edf7fb; }
 .theme-dark .crew-selector h2, .theme-dark .crew-slot-label strong { color: #edf7fb; }
+.theme-dark .crew-empty strong, .theme-dark .crew-template-system strong { color: #edf7fb; }
 .theme-dark .crew-summary-grid .attention { border-color: #9b762b; }
 .theme-dark .crew-summary-grid .complete { border-color: #337e62; }
 
