@@ -9,6 +9,7 @@ A private, role-based overtime, PTO, employee, department, and 2-2-3 shift track
 - Overtime entry with quick hours, working department, cost code, reason, and notes.
 - Historical employee, department, and shift snapshots so later transfers or renames do not rewrite old reports.
 - Personal dashboards with add/remove, ordering, sizing, KPI, chart, workforce, schedule, and daily-detail widgets saved for each signed-in account.
+- Persistent crew-placement boards built from department-specific system templates, with drag-and-drop assignments, required-position gaps, and timestamped movement history.
 - Reports filtered by employee, department, shift, cost code, reason, and date.
 - CSV employee and historical-data imports plus Excel-ready report exports.
 
@@ -58,9 +59,9 @@ The project includes the current Supabase project URL and browser-safe publishab
 
 ## Roles
 
-- **Admin:** departments, employees, imports, schedule corrections, user approvals, reports, OT/PTO, and audit history.
-- **Supervisor:** OT and PTO entry/deletion plus read-only operational views.
-- **Viewer:** read-only access.
+- **Admin:** departments, employees, imports, schedule corrections, user approvals, reports, OT/PTO, audit history, crew templates, and every crew-placement board.
+- **Supervisor:** OT/PTO plus an editable crew-placement board restricted to the supervisor's assigned department, color, and Day/Night crew.
+- **Viewer:** read-only access, including the ability to flip through every crew-placement board.
 
 ## Managing approved users
 
@@ -83,3 +84,18 @@ Supabase Auth user ID, so it follows that person between computers and browsers.
 Viewer accounts can customize their dashboard but remain read-only everywhere
 else. PostgreSQL row-level security allows each approved user to read or change
 only their own dashboard preference record.
+
+## Crew placement
+
+Administrators create each department's systems and exact positions from
+**Crew Placement → Manage templates**. The same template is available separately
+to Blue Day, Blue Night, Yellow Day, and Yellow Night. Supervisors land on only
+their assigned crew and can drag employees into positions, click an employee and
+then a position, swap two placed employees, or return someone to Unassigned.
+Assignments persist until explicitly changed. Viewer and administrator accounts
+can switch department, color, and period to review the entire operation.
+
+Required-position coverage and open-gap summaries are optional personal dashboard
+widgets. Every placement change is stored automatically with its actor and time.
+Existing deployments must apply
+`supabase/migrations/20260814080000_crew_placement.sql` before enabling the page.

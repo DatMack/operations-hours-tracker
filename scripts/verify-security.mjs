@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
-const [client, html, baseMigration, migration, privateHelpersMigration, companyMigration, assignmentMigration, colorMigration, profileManagementMigration, dashboardMigration, deployWorkflow] = await Promise.all([
+const [client, html, baseMigration, migration, privateHelpersMigration, companyMigration, assignmentMigration, colorMigration, profileManagementMigration, dashboardMigration, crewPlacementMigration, deployWorkflow] = await Promise.all([
   read("src/lib/supabase.ts"),
   read("index.html"),
   read("supabase/migrations/20260814000000_operations_hours_tracker.sql"),
@@ -13,6 +13,7 @@ const [client, html, baseMigration, migration, privateHelpersMigration, companyM
   read("supabase/migrations/20260814050000_supervisor_shift_color.sql"),
   read("supabase/migrations/20260814060000_profile_admin_management.sql"),
   read("supabase/migrations/20260814070000_personal_dashboards.sql"),
+  read("supabase/migrations/20260814080000_crew_placement.sql"),
   read(".github/workflows/deploy-pages.yml"),
 ]);
 
@@ -63,6 +64,12 @@ assert.match(dashboardMigration, /revoke all on table public\.dashboard_preferen
 for (const operation of ["select", "insert", "update", "delete"]) {
   assert.match(dashboardMigration, new RegExp(`dashboard_preferences_own_${operation}[\\s\\S]*auth\\.uid\\(\\) = user_id[\\s\\S]*private\\.tracker_is_approved\\(\\)`, "i"), `Dashboard ${operation} must be limited to the signed-in approved user`);
 }
+for (const table of ["crew_systems", "crew_positions", "crew_placements", "crew_placement_history"]) {
+  assert.match(crewPlacementMigration, new RegExp(`alter table public\\.${table} force row level security`, "i"), `${table} must force RLS`);
+}
+assert.match(crewPlacementMigration, /p\.department_id = e\.department_id[\s\S]*p\.shift_color = e\.shift_color[\s\S]*p\.shift_period = e\.shift_period/i, "Crew placement writes must enforce the supervisor's exact crew assignment");
+assert.match(crewPlacementMigration, /create trigger crew_placement_validation_trigger/i, "Crew placement integrity must be enforced in PostgreSQL");
+assert.match(crewPlacementMigration, /create trigger crew_placement_history_trigger/i, "Crew movement history must be automatic");
 assert.match(deployWorkflow, /contents: read/, "The deployment workflow must use read-only repository access");
 assert.match(deployWorkflow, /pages: write/, "The deployment workflow may write only to Pages");
 

@@ -27,6 +27,8 @@ export const DASHBOARD_WIDGET_IDS = [
   "pto_type",
   "staffing_department",
   "staffing_crew",
+  "placement_coverage",
+  "placement_gaps",
   "schedule",
   "selected_ot",
   "selected_pto",
@@ -64,6 +66,10 @@ export type OvertimeEntry = {
 export type PtoEntry = { id: string; ptoDate: string; employeeId: string; hours: number; ptoType: string; notes: string; enteredBy: string; createdAt: string };
 export type Override = { workDate: string; shiftColor: ShiftColor; reason: string; updatedBy: string; updatedAt?: string };
 export type Audit = { id: string; action: string; entityType: string; details: string; userEmail: string; createdAt: string };
+export type CrewSystem = { id: string; departmentId: string; name: string; sortOrder: number; active: boolean; createdAt: string; updatedAt: string };
+export type CrewPosition = { id: string; systemId: string; name: string; sortOrder: number; required: boolean; active: boolean; createdAt: string; updatedAt: string };
+export type CrewPlacement = { employeeId: string; positionId: string; shiftColor: ShiftColor; shiftPeriod: "Day" | "Night"; updatedBy: string; updatedAt: string };
+export type CrewPlacementHistory = { id: string; employeeId: string; previousPositionId?: string; nextPositionId?: string; changedBy: string; changedAt: string };
 export type TrackerBundle = {
   backend: "supabase";
   session: Profile;
@@ -76,6 +82,11 @@ export type TrackerBundle = {
   dashboardPersistenceReady: boolean;
   profiles: Profile[];
   auditLog: Audit[];
+  crewSystems: CrewSystem[];
+  crewPositions: CrewPosition[];
+  crewPlacements: CrewPlacement[];
+  crewPlacementHistory: CrewPlacementHistory[];
+  crewPlacementReady: boolean;
 };
 
 type DbError = { message: string; code?: string } | null;
@@ -101,6 +112,10 @@ type PtoRow = { id: string; pto_date: string; employee_id: string; hours: number
 type OverrideRow = { work_date: string; shift_color: ShiftColor; reason: string; updated_by: string; updated_at: string };
 type AuditRow = { id: string; action: string; entity_type: string; entity_id: string; details: unknown; user_email: string; created_at: string };
 type DashboardPreferenceRow = { widgets: unknown };
+type CrewSystemRow = { id: string; department_id: string; name: string; sort_order: number; active: boolean; created_at: string; updated_at: string };
+type CrewPositionRow = { id: string; system_id: string; name: string; sort_order: number; required: boolean; active: boolean; created_at: string; updated_at: string };
+type CrewPlacementRow = { employee_id: string; position_id: string; shift_color: ShiftColor; shift_period: "Day" | "Night"; updated_by: string; updated_at: string };
+type CrewPlacementHistoryRow = { id: string; employee_id: string; previous_position_id: string | null; next_position_id: string | null; changed_by: string; changed_at: string };
 
 export const DEFAULT_DASHBOARD_WIDGETS: DashboardWidget[] = [
   { id: "shift_today", size: "wide" },
@@ -126,6 +141,12 @@ function missingDashboardPreferencesTable(error: DbError) {
   return error.code === "PGRST205" || error.code === "42P01" || (message.includes("dashboard_preferences") && (message.includes("schema cache") || message.includes("does not exist") || message.includes("could not find")));
 }
 
+function missingCrewPlacementTable(error: DbError) {
+  if (!error) return false;
+  const message = error.message.toLowerCase();
+  return error.code === "PGRST205" || error.code === "42P01" || (["crew_systems", "crew_positions", "crew_placements", "crew_placement_history"].some((table) => message.includes(table)) && (message.includes("schema cache") || message.includes("does not exist") || message.includes("could not find")));
+}
+
 function validDate(value: unknown): value is string {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
@@ -143,6 +164,12 @@ function asHours(value: unknown) {
 
 function textValue(value: unknown, max = 250) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
+}
+
+function sortOrderValue(value: unknown) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0 || number > 10000) throw new Error("Sort order must be a whole number between 0 and 10,000.");
+  return number;
 }
 
 function dashboardWidgets(value: unknown): DashboardWidget[] {
@@ -211,6 +238,22 @@ function audit(row: AuditRow): Audit {
   return { id: row.id, action: row.action, entityType: row.entity_type, details: typeof row.details === "string" ? row.details : JSON.stringify(row.details ?? {}), userEmail: row.user_email, createdAt: row.created_at };
 }
 
+function crewSystem(row: CrewSystemRow): CrewSystem {
+  return { id: row.id, departmentId: row.department_id, name: row.name, sortOrder: row.sort_order, active: row.active, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+function crewPosition(row: CrewPositionRow): CrewPosition {
+  return { id: row.id, systemId: row.system_id, name: row.name, sortOrder: row.sort_order, required: row.required, active: row.active, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+function crewPlacement(row: CrewPlacementRow): CrewPlacement {
+  return { employeeId: row.employee_id, positionId: row.position_id, shiftColor: row.shift_color, shiftPeriod: row.shift_period, updatedBy: row.updated_by, updatedAt: row.updated_at };
+}
+
+function crewPlacementHistory(row: CrewPlacementHistoryRow): CrewPlacementHistory {
+  return { id: row.id, employeeId: row.employee_id, previousPositionId: row.previous_position_id ?? undefined, nextPositionId: row.next_position_id ?? undefined, changedBy: row.changed_by, changedAt: row.changed_at };
+}
+
 async function currentProfile(db: SupabaseClient): Promise<Profile> {
   const userResult = await db.auth.getUser();
   check(userResult.error, "verify the signed-in user");
@@ -228,6 +271,17 @@ async function departmentRows() {
   const result = await supabase.from("departments").select("*").order("active", { ascending: false }).order("name");
   check(result.error, "load departments");
   return (result.data ?? []) as unknown as DepartmentRow[];
+}
+
+async function crewEmployeeInScope(session: Profile, employeeId: string) {
+  const result = await supabase.from("employees").select("*").eq("id", employeeId).maybeSingle();
+  check(result.error, "find the crew employee");
+  const selectedEmployee = result.data as unknown as EmployeeRow | null;
+  if (!selectedEmployee?.active) throw new Error("Select an active employee.");
+  if (session.role === "supervisor" && (session.departmentId !== selectedEmployee.department_id || session.shiftColor !== selectedEmployee.shift_color || session.shiftPeriod !== selectedEmployee.shift_period)) {
+    throw new Error("You can only update your assigned department and crew.");
+  }
+  return selectedEmployee;
 }
 
 async function allEntryRows(table: "overtime_entries" | "pto_entries", dateColumn: "work_date" | "pto_date") {
@@ -261,7 +315,7 @@ function validReason(value: unknown, fallback = "") {
 export async function loadBundle(): Promise<TrackerBundle> {
   const session = await currentProfile(supabase);
   if (!session.userId) throw new Error("Your Supabase account is missing a user ID.");
-  const [departmentResult, employeeResult, overtimeRows, ptoRows, overrideResult, dashboardResult, profileResult, auditResult] = await Promise.all([
+  const [departmentResult, employeeResult, overtimeRows, ptoRows, overrideResult, dashboardResult, profileResult, auditResult, crewSystemResult, crewPositionResult, crewPlacementResult, crewHistoryResult] = await Promise.all([
     supabase.from("departments").select("*").order("active", { ascending: false }).order("name"),
     supabase.from("employees").select("*").order("shift_color").order("shift_period").order("name"),
     allEntryRows("overtime_entries", "work_date"),
@@ -270,6 +324,10 @@ export async function loadBundle(): Promise<TrackerBundle> {
     supabase.from("dashboard_preferences").select("widgets").eq("user_id", session.userId).maybeSingle(),
     session.role === "admin" ? supabase.from("profiles").select("*").order("full_name") : Promise.resolve({ data: [], error: null }),
     session.role === "admin" ? supabase.from("audit_log").select("*").order("created_at", { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
+    supabase.from("crew_systems").select("*").order("sort_order").order("name"),
+    supabase.from("crew_positions").select("*").order("sort_order").order("name"),
+    supabase.from("crew_placements").select("*").order("updated_at", { ascending: false }),
+    supabase.from("crew_placement_history").select("*").order("changed_at", { ascending: false }).limit(250),
   ]);
   check(departmentResult.error, "load departments");
   check(employeeResult.error, "load employees");
@@ -278,6 +336,11 @@ export async function loadBundle(): Promise<TrackerBundle> {
   if (dashboardResult.error && !missingDashboardPreferencesTable(dashboardResult.error)) check(dashboardResult.error, "load your dashboard layout");
   check(profileResult.error, "load approved users");
   check(auditResult.error, "load audit history");
+  const crewResults = [crewSystemResult, crewPositionResult, crewPlacementResult, crewHistoryResult];
+  const crewPlacementReady = crewResults.every((result) => !result.error);
+  for (const result of crewResults) {
+    if (result.error && !missingCrewPlacementTable(result.error)) check(result.error, "load crew placement");
+  }
 
   return {
     backend: "supabase",
@@ -291,6 +354,11 @@ export async function loadBundle(): Promise<TrackerBundle> {
     dashboardPersistenceReady,
     profiles: ((profileResult.data ?? []) as unknown as ProfileRow[]).map(profile),
     auditLog: ((auditResult.data ?? []) as unknown as AuditRow[]).map(audit),
+    crewSystems: crewPlacementReady ? ((crewSystemResult.data ?? []) as unknown as CrewSystemRow[]).map(crewSystem) : [],
+    crewPositions: crewPlacementReady ? ((crewPositionResult.data ?? []) as unknown as CrewPositionRow[]).map(crewPosition) : [],
+    crewPlacements: crewPlacementReady ? ((crewPlacementResult.data ?? []) as unknown as CrewPlacementRow[]).map(crewPlacement) : [],
+    crewPlacementHistory: crewPlacementReady ? ((crewHistoryResult.data ?? []) as unknown as CrewPlacementHistoryRow[]).map(crewPlacementHistory) : [],
+    crewPlacementReady,
   };
 }
 
@@ -303,6 +371,65 @@ export async function mutateTracker(payload: Record<string, unknown>): Promise<T
     const widgets = dashboardWidgets(payload.widgets);
     const result = await supabase.from("dashboard_preferences").upsert({ user_id: session.userId, widgets, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
     check(result.error, "save your dashboard layout");
+  } else if (action === "add_crew_system") {
+    requireAdmin(session.role);
+    const name = textValue(payload.name, 100);
+    const selected = selectedDepartment(await departmentRows(), payload.departmentId);
+    if (!name || !selected.active) throw new Error("An active department and system name are required.");
+    const result = await supabase.from("crew_systems").insert({ id: crypto.randomUUID(), department_id: selected.id, name, sort_order: sortOrderValue(payload.sortOrder ?? 0), active: true });
+    check(result.error, "add the crew system");
+  } else if (action === "update_crew_system") {
+    requireAdmin(session.role);
+    const id = textValue(payload.id, 80);
+    const name = textValue(payload.name, 100);
+    if (!id || !name) throw new Error("Select a crew system and enter its name.");
+    if (payload.active === false) {
+      const positions = await supabase.from("crew_positions").select("id").eq("system_id", id);
+      check(positions.error, "find crew system positions");
+      const ids = (positions.data ?? []).map((row) => String(row.id));
+      if (ids.length) {
+        const clear = await supabase.from("crew_placements").delete().in("position_id", ids);
+        check(clear.error, "clear placements from the inactive system");
+      }
+    }
+    const result = await supabase.from("crew_systems").update({ name, sort_order: sortOrderValue(payload.sortOrder ?? 0), active: payload.active !== false, updated_at: new Date().toISOString() }).eq("id", id);
+    check(result.error, "update the crew system");
+  } else if (action === "add_crew_position") {
+    requireAdmin(session.role);
+    const systemId = textValue(payload.systemId, 80);
+    const name = textValue(payload.name, 100);
+    if (!systemId || !name) throw new Error("Select a system and enter a position name.");
+    const system = await supabase.from("crew_systems").select("id, active").eq("id", systemId).maybeSingle();
+    check(system.error, "find the crew system");
+    if (!system.data?.active) throw new Error("Positions can only be added to an active system.");
+    const result = await supabase.from("crew_positions").insert({ id: crypto.randomUUID(), system_id: systemId, name, sort_order: sortOrderValue(payload.sortOrder ?? 0), required: payload.required !== false, active: true });
+    check(result.error, "add the crew position");
+  } else if (action === "update_crew_position") {
+    requireAdmin(session.role);
+    const id = textValue(payload.id, 80);
+    const name = textValue(payload.name, 100);
+    if (!id || !name) throw new Error("Select a crew position and enter its name.");
+    if (payload.active === false) {
+      const clear = await supabase.from("crew_placements").delete().eq("position_id", id);
+      check(clear.error, "clear placements from the inactive position");
+    }
+    const result = await supabase.from("crew_positions").update({ name, sort_order: sortOrderValue(payload.sortOrder ?? 0), required: payload.required !== false, active: payload.active !== false, updated_at: new Date().toISOString() }).eq("id", id);
+    check(result.error, "update the crew position");
+  } else if (action === "assign_crew_position") {
+    requireWrite(session.role);
+    const employeeId = textValue(payload.employeeId, 80);
+    const positionId = textValue(payload.positionId, 80);
+    if (!employeeId || !positionId) throw new Error("Select an employee and a position.");
+    await crewEmployeeInScope(session, employeeId);
+    const result = await supabase.rpc("move_crew_employee", { target_employee_id: employeeId, target_position_id: positionId });
+    check(result.error, "move the crew employee");
+  } else if (action === "clear_crew_placement") {
+    requireWrite(session.role);
+    const employeeId = textValue(payload.employeeId, 80);
+    if (!employeeId) throw new Error("Select an employee to unassign.");
+    await crewEmployeeInScope(session, employeeId);
+    const result = await supabase.from("crew_placements").delete().eq("employee_id", employeeId);
+    check(result.error, "clear the crew placement");
   } else if (action === "add_department" || action === "update_department") {
     requireAdmin(session.role);
     const name = textValue(payload.name, 100);
