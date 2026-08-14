@@ -495,7 +495,7 @@ function DashboardWidgetView({ widget, data, selectedDate, workingColor, activeE
       name: department.name,
       count: scheduledEmployees.filter((employee) => employee.departmentId === department.id).length,
     })).filter((department) => department.count > 0);
-    return <article className={\`dashboard-widget dashboard-shift \${workingColor.toLowerCase()} \${widget.size}\`}>
+    return <article className={"dashboard-widget dashboard-shift " + workingColor.toLowerCase() + " " + widget.size}>
       <div><span className="hero-kicker">Scheduled on {prettyDate(selectedDate, true)}</span><h2>{workingColor} Shift</h2></div>
       <div className="scheduled-departments"><span>Scheduled by department</span><div>{departmentSchedule.map((department) => <p key={department.name}><b>{department.name}</b><strong>{department.count}</strong></p>)}</div></div>
       <div className="hero-count"><strong>{scheduledEmployees.length}</strong><span>scheduled employees</span></div>
