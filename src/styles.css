@@ -221,6 +221,7 @@ tfoot td { background: #f4f7f8; color: var(--navy); font-weight: 900; }
 .add-user { margin: 10px 20px 20px; padding: 13px; border: 1px dashed #b9cad3; border-radius: 8px; }
 .add-user summary { color: var(--teal-dark); font-size: 12px; font-weight: 800; cursor: pointer; }
 .add-user form { margin-top: 14px; display: grid; gap: 12px; }
+.form-help { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .add-user label, .modal-form label { display: flex; flex-direction: column; gap: 6px; color: #4e5d68; font-size: 11px; font-weight: 800; }
 .audit-list { padding: 9px 20px 18px; }
 .audit-list > div { padding: 10px 0; display: flex; gap: 10px; border-bottom: 1px solid #edf1f3; }
