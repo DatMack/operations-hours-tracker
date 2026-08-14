@@ -490,3 +490,11 @@ html:has(.theme-dark), body:has(.theme-dark) { background: #091923; }
 
 .roster-expand { padding: 0 18px 18px; display: flex; justify-content: center; }
 .roster-expand .secondary-button { min-width: 190px; }
+
+.roster-limit-control { min-width: 230px; display: flex; align-items: center; flex-direction: column; gap: 6px; color: var(--muted); font-size: 11px; text-align: right; }
+.roster-limit-control span { white-space: nowrap; }
+.roster-limit-control strong { color: var(--navy); }
+.roster-limit-control input { width: 190px; min-height: auto; padding: 0; accent-color: var(--teal); }
+.roster-limit-control input:disabled { opacity: .45; }
+.theme-dark .roster-limit-control strong { color: #edf7fb; }
+@media (max-width: 720px) { .roster-limit-control { width: 100%; align-items: flex-start; text-align: left; } .roster-limit-control input { width: 100%; } }
