@@ -422,3 +422,10 @@ tfoot td { background: #f4f7f8; color: var(--navy); font-weight: 900; }
 .settings-note strong { color: var(--navy); font-size: 12px; }
 .settings-note small { color: var(--muted); font-size: 11px; line-height: 1.45; }
 @media (max-width: 720px) { .settings-grid { grid-template-columns: 1fr; } }
+
+
+/* Keep the full page in the selected appearance mode. */
+html:has(.theme-dark), body:has(.theme-dark) { background: #091923; }
+.theme-dark .topbar { background: #071923; }
+.theme-dark .page-heading h1 { color: #eef8ff; }
+.theme-dark .page-heading > div > span { color: #b7c9d4; }
