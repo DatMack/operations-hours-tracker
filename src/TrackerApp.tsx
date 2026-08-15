@@ -534,9 +534,17 @@ function DashboardWidgetView({ widget, data, selectedDate, workingColor, activeE
       count: scheduledEmployees.filter((employee) => employee.departmentId === department.id).length,
     })).filter((department) => department.count > 0);
     return <article className={"dashboard-widget dashboard-shift " + workingColor.toLowerCase() + " " + widget.size}>
-      <div><span className="hero-kicker">Scheduled on {prettyDate(selectedDate, true)}</span><h2>{workingColor} Shift</h2></div>
-      <div className="scheduled-departments"><span>Scheduled by department</span><div>{departmentSchedule.map((department) => <p key={department.name}><b>{department.name}</b><strong>{department.count}</strong></p>)}</div></div>
-      <div className="hero-count"><strong>{scheduledEmployees.length}</strong><span>scheduled employees</span></div>
+      <div className="shift-summary"><span className="hero-kicker">Scheduled on {prettyDate(selectedDate, true)}</span><h2>{workingColor} Shift</h2></div>
+      <div className="department-summary">
+        <div className="department-summary-head">
+          <span>Department breakdown</span>
+          <small>{departmentSchedule.length} {departmentSchedule.length === 1 ? "department" : "departments"}</small>
+        </div>
+        <div className="department-summary-list" role="list" aria-label="Scheduled employees by department">
+          {departmentSchedule.length ? departmentSchedule.map((department) => <div key={department.name} role="listitem" title={`${department.name}: ${department.count} scheduled`}><span>{department.name}</span><strong>{department.count}</strong></div>) : <p>No employees scheduled</p>}
+        </div>
+      </div>
+      <div className="hero-count"><strong>{scheduledEmployees.length}</strong><span>overall scheduled</span></div>
       {data.scheduleOverrides.some((item) => item.workDate === selectedDate) && <span className="override-flag">Admin corrected</span>}
     </article>;
   }

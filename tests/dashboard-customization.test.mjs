@@ -31,3 +31,16 @@ test("dashboard catalog contains management metrics, charts, workforce, schedule
     assert.match(app, new RegExp(`id: "${widget}"`), `${widget} must be offered in the widget catalog`);
   }
 });
+
+test("scheduled shift breakdown stays compact as departments are added", async () => {
+  const [app, styles] = await Promise.all([
+    read("src/TrackerApp.tsx"),
+    read("src/styles.css"),
+  ]);
+
+  assert.match(app, /Department breakdown/);
+  assert.match(app, /aria-label="Scheduled employees by department"/);
+  assert.match(app, /departmentSchedule\.length === 1 \? "department" : "departments"/);
+  assert.match(styles, /\.department-summary-list\s*\{[^}]*max-height:[^}]*overflow-y:\s*auto/s, "Long department lists must scroll inside the banner instead of growing the dashboard");
+  assert.match(styles, /\.department-summary-list > div span\s*\{[^}]*text-overflow:\s*ellipsis/s, "Long department names must not push the totals out of view");
+});
