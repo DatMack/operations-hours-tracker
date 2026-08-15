@@ -525,19 +525,26 @@ html:has(.theme-dark), body:has(.theme-dark) { background: #091923; }
 
 
 /* Scheduled-shift staffing breakdown */
-.dashboard-shift { grid-template-columns: minmax(190px, 1fr) minmax(260px, 1.25fr) auto; }
-.scheduled-departments { position: relative; z-index: 2; min-width: 0; }
-.scheduled-departments > span { display: block; margin-bottom: 8px; font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; opacity: .75; }
-.scheduled-departments > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 16px; }
-.scheduled-departments p { margin: 0; display: flex; justify-content: space-between; gap: 10px; color: rgba(255,255,255,.82); font-size: 12px; }
-.scheduled-departments b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
-.scheduled-departments strong { flex: 0 0 auto; color: white; font-size: 13px; }
+.dashboard-shift { grid-template-columns: minmax(190px, .9fr) minmax(300px, 1.25fr) auto; }
+.shift-summary { position: relative; z-index: 2; }
+.department-summary { position: relative; z-index: 2; min-width: 0; padding: 13px 14px; border: 1px solid rgba(255,255,255,.16); border-radius: 12px; background: rgba(5,25,38,.14); backdrop-filter: blur(4px); }
+.department-summary-head { margin-bottom: 9px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.department-summary-head > span { font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; opacity: .78; }
+.department-summary-head small { flex: 0 0 auto; color: rgba(255,255,255,.65); font-size: 10px; }
+.department-summary-list { max-height: 76px; padding-right: 3px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; overflow-y: auto; scrollbar-color: rgba(255,255,255,.35) transparent; scrollbar-width: thin; }
+.department-summary-list > div { min-width: 0; padding: 7px 8px 7px 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-radius: 8px; background: rgba(255,255,255,.1); color: rgba(255,255,255,.88); font-size: 12px; }
+.department-summary-list > div span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.department-summary-list > div strong { min-width: 25px; height: 22px; padding: 0 6px; display: grid; place-items: center; border-radius: 7px; color: white; background: rgba(5,25,38,.24); font-size: 12px; }
+.department-summary-list > p { grid-column: 1 / -1; margin: 0; padding: 10px; color: rgba(255,255,255,.72); font-size: 12px; text-align: center; }
 @media (max-width: 820px) {
   .dashboard-shift { grid-template-columns: 1fr auto; }
-  .scheduled-departments { grid-column: 1 / -1; }
+  .department-summary { grid-column: 1 / -1; grid-row: 2; }
 }
 @media (max-width: 520px) {
-  .scheduled-departments > div { grid-template-columns: 1fr; }
+  .dashboard-shift { grid-template-columns: 1fr; }
+  .hero-count { grid-row: 2; }
+  .department-summary { grid-row: 3; }
+  .department-summary-list { grid-template-columns: 1fr; }
 }
 
 .roster-expand { padding: 0 18px 18px; display: flex; justify-content: center; }
