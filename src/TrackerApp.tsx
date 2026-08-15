@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import CrewPlacement from "./CrewPlacement";
+import { crewPositionAtEndOfDay } from "./lib/day-snapshot";
 import { shiftForDate, toDateInput, type ShiftColor } from "./lib/schedule";
 import {
   loadBundle,
@@ -11,6 +12,8 @@ import {
   type DashboardWidgetId,
   type DashboardWidgetSize,
   type Employee,
+  type CrewPosition,
+  type CrewSystem,
   type OvertimeEntry,
   type Override,
   type Profile,
@@ -150,6 +153,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
   const [overtimeEditor, setOvertimeEditor] = useState<OvertimeEditor | null>(null);
   const [ptoEmployee, setPtoEmployee] = useState<Employee | null>(null);
   const [overrideDate, setOverrideDate] = useState<string | null>(null);
+  const [calendarDetailDate, setCalendarDetailDate] = useState<string | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null);
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
@@ -376,7 +380,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
 
         {tab === "crew" && <CrewPlacement data={data} busy={busy} onMutate={mutate} />}
 
-        {tab === "calendar" && <CalendarView monthValue={calendarMonth} setMonthValue={setCalendarMonth} overrides={data.scheduleOverrides} isAdmin={Boolean(isAdmin)} onSelect={setOverrideDate} />}
+        {tab === "calendar" && <CalendarView monthValue={calendarMonth} setMonthValue={setCalendarMonth} overrides={data.scheduleOverrides} overtime={data.overtimeEntries} pto={data.ptoEntries} onSelect={(date) => { setSelectedDate(date); setCalendarDetailDate(date); }} />}
 
         {tab === "reports" && (
           <>
@@ -444,6 +448,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
 
       {overtimeEditor && <Modal title={overtimeEditor.entry ? "Edit overtime" : "Add overtime"} onClose={() => setOvertimeEditor(null)}><OvertimeForm employee={overtimeEditor.employee} entry={overtimeEditor.entry} date={selectedDate} departments={data.departments} busy={busy} onSubmit={async (values) => { const action = overtimeEditor.entry ? "update_overtime" : "add_overtime"; const ok = await mutate({ action, id: overtimeEditor.entry?.id, employeeId: overtimeEditor.employee.id, workDate: selectedDate, ...values }, overtimeEditor.entry ? "Overtime entry updated." : "Overtime entry saved."); if (ok) setOvertimeEditor(null); }} onDelete={overtimeEditor.entry ? async () => { const ok = await mutate({ action: "delete_overtime", id: overtimeEditor.entry?.id }, "Overtime entry removed."); if (ok) setOvertimeEditor(null); } : undefined} /></Modal>}
       {ptoEmployee && <Modal title="Add PTO" onClose={() => setPtoEmployee(null)}><PtoForm employee={ptoEmployee} date={selectedDate} busy={busy} onSubmit={async (values) => { const ok = await mutate({ action: "add_pto", employeeId: ptoEmployee.id, ptoDate: selectedDate, ...values }, "PTO entry saved."); if (ok) setPtoEmployee(null); }} /></Modal>}
+      {calendarDetailDate && <Modal title={`Day snapshot · ${prettyDate(calendarDetailDate)}`} wide onClose={() => setCalendarDetailDate(null)}><CalendarDaySnapshot date={calendarDetailDate} data={data} isAdmin={Boolean(isAdmin)} onCorrect={() => { setCalendarDetailDate(null); setOverrideDate(calendarDetailDate); }} /></Modal>}
       {overrideDate && <Modal title="Correct scheduled shift" onClose={() => setOverrideDate(null)}><OverrideForm date={overrideDate} current={shiftForDate(overrideDate, data.scheduleOverrides)} override={data.scheduleOverrides.find((item) => item.workDate === overrideDate)} busy={busy} onSave={async (values) => { const ok = await mutate({ action: "set_override", workDate: overrideDate, ...values }, "Schedule correction saved."); if (ok) setOverrideDate(null); }} onRemove={async () => { const ok = await mutate({ action: "delete_override", workDate: overrideDate }, "Schedule correction removed."); if (ok) setOverrideDate(null); }} /></Modal>}
       {editingEmployee && <Modal title={editingEmployee.id ? "Edit employee" : "Add employee"} onClose={() => setEditingEmployee(null)}><EmployeeForm employee={editingEmployee} departments={data.departments} busy={busy} onSave={async (values) => { const ok = await mutate({ action: editingEmployee.id ? "update_employee" : "add_employee", id: editingEmployee.id, ...values }, editingEmployee.id ? "Employee updated." : "Employee added."); if (ok) setEditingEmployee(null); }} /></Modal>}
       {editingDepartment && <Modal title={editingDepartment.id ? "Edit department" : "Add department"} onClose={() => setEditingDepartment(null)}><DepartmentForm department={editingDepartment} activeEmployeeCount={activeEmployees.filter((employee) => employee.departmentId === editingDepartment.id).length} busy={busy} onSave={async (values) => { const ok = await mutate({ action: editingDepartment.id ? "update_department" : "add_department", id: editingDepartment.id, ...values }, editingDepartment.id ? "Department updated." : "Department added."); if (ok) setEditingDepartment(null); }} /></Modal>}
@@ -704,14 +709,81 @@ function WeekOverview({ dates, selectedDate, setSelectedDate, entries, overrides
   return <section className="week-overview" aria-label="Overtime week">{dates.map((date) => { const daily = entries.filter((entry) => entry.workDate === date); const color = shiftForDate(date, overrides); return <button key={date} className={`${date === selectedDate ? "active" : ""} ${color.toLowerCase()}`} onClick={() => setSelectedDate(date)}><span>{dateFromInput(date).toLocaleDateString("en-US", { weekday: "short" })}</span><strong>{dateFromInput(date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</strong><small>{color} working</small><b>{daily.reduce((sum, entry) => sum + entry.hours, 0).toFixed(1)} hrs · {daily.length} entries</b></button>; })}</section>;
 }
 
-function CalendarView({ monthValue, setMonthValue, overrides, isAdmin, onSelect }: { monthValue: string; setMonthValue: (value: string) => void; overrides: Override[]; isAdmin: boolean; onSelect: (date: string) => void }) {
+function CalendarView({ monthValue, setMonthValue, overrides, overtime, pto, onSelect }: { monthValue: string; setMonthValue: (value: string) => void; overrides: Override[]; overtime: OvertimeEntry[]; pto: PtoEntry[]; onSelect: (date: string) => void }) {
   const focus = dateFromInput(monthValue);
   const first = new Date(focus.getFullYear(), focus.getMonth(), 1);
   const gridStart = new Date(first); gridStart.setDate(first.getDate() - first.getDay());
   const days = Array.from({ length: 42 }, (_, index) => { const date = new Date(gridStart); date.setDate(gridStart.getDate() + index); return date; });
   const title = first.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  const overtimeCounts = overtime.reduce((counts, entry) => counts.set(entry.workDate, (counts.get(entry.workDate) ?? 0) + 1), new Map<string, number>());
+  const ptoCounts = pto.reduce((counts, entry) => counts.set(entry.ptoDate, (counts.get(entry.ptoDate) ?? 0) + 1), new Map<string, number>());
   function moveMonth(amount: number) { setMonthValue(toDateInput(new Date(first.getFullYear(), first.getMonth() + amount, 1))); }
-  return <><div className="page-heading"><div><p className="eyebrow">Automatic rotation</p><h1>Shift Calendar</h1><span>Verified 2-2-3 Yellow and Blue schedule. Admin corrections are marked.</span></div><div className="month-controls"><button onClick={() => moveMonth(-1)}>‹</button><strong>{title}</strong><button onClick={() => moveMonth(1)}>›</button></div></div><section className="calendar-panel"><div className="weekday-row">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{days.map((date) => { const dateValue = toDateInput(date); const color = shiftForDate(dateValue, overrides); const savedOverride = overrides.find((item) => item.workDate === dateValue); const outside = date.getMonth() !== first.getMonth(); return <button key={dateValue} className={`calendar-day ${color.toLowerCase()} ${outside ? "outside" : ""}`} onClick={() => isAdmin && onSelect(dateValue)} disabled={!isAdmin}><span>{date.getDate()}</span><ShiftBadge color={color} compact />{savedOverride && <em title={savedOverride.reason || "Admin correction"}>Corrected</em>}</button>; })}</div></section><div className="calendar-legend"><ShiftBadge color="Blue" /><span>Blue Day & Night working</span><ShiftBadge color="Yellow" /><span>Yellow Day & Night working</span>{isAdmin && <small>Click a date to correct its scheduled color.</small>}</div></>;
+  return <><div className="page-heading"><div><p className="eyebrow">Automatic rotation</p><h1>Shift Calendar</h1><span>Choose any date for its scheduled roster, placement snapshot, PTO, and overtime.</span></div><div className="month-controls"><button onClick={() => moveMonth(-1)}>‹</button><strong>{title}</strong><button onClick={() => moveMonth(1)}>›</button></div></div><section className="calendar-panel"><div className="weekday-row">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{days.map((date) => { const dateValue = toDateInput(date); const color = shiftForDate(dateValue, overrides); const savedOverride = overrides.find((item) => item.workDate === dateValue); const outside = date.getMonth() !== first.getMonth(); const otCount = overtimeCounts.get(dateValue) ?? 0; const ptoCount = ptoCounts.get(dateValue) ?? 0; return <button key={dateValue} className={`calendar-day ${color.toLowerCase()} ${outside ? "outside" : ""}`} onClick={() => onSelect(dateValue)} aria-label={`Open details for ${prettyDate(dateValue)}`}><span>{date.getDate()}</span><ShiftBadge color={color} compact />{(otCount > 0 || ptoCount > 0) && <small className="calendar-day-counts">{otCount > 0 && <b>{otCount} OT</b>}{ptoCount > 0 && <b>{ptoCount} PTO</b>}</small>}{savedOverride && <em title={savedOverride.reason || "Admin correction"}>Corrected</em>}</button>; })}</div></section><div className="calendar-legend"><ShiftBadge color="Blue" /><span>Blue Day & Night working</span><ShiftBadge color="Yellow" /><span>Yellow Day & Night working</span><small>Click any date to open the complete day snapshot.</small></div></>;
+}
+
+function CalendarDaySnapshot({ date, data, isAdmin, onCorrect }: { date: string; data: TrackerBundle; isAdmin: boolean; onCorrect: () => void }) {
+  const workingColor = shiftForDate(date, data.scheduleOverrides);
+  const dayOvertime = data.overtimeEntries.filter((entry) => entry.workDate === date);
+  const dayPto = data.ptoEntries.filter((entry) => entry.ptoDate === date);
+  const scheduled = data.employees
+    .filter((employee) => employee.active && employee.shiftColor === workingColor)
+    .sort((a, b) => a.shiftPeriod.localeCompare(b.shiftPeriod) || a.department.localeCompare(b.department) || a.name.localeCompare(b.name));
+  const positionsById = new Map<string, CrewPosition>(data.crewPositions.map((position) => [position.id, position]));
+  const systemsById = new Map<string, CrewSystem>(data.crewSystems.map((system) => [system.id, system]));
+  const employeesById = new Map(data.employees.map((employee) => [employee.id, employee]));
+  const ptoByEmployee = dayPto.reduce((map, entry) => {
+    map.set(entry.employeeId, [...(map.get(entry.employeeId) ?? []), entry]);
+    return map;
+  }, new Map<string, PtoEntry[]>());
+
+  function resolveLocation(employee: Employee) {
+    const positionId = crewPositionAtEndOfDay(employee.id, date, data.crewPlacements, data.crewPlacementHistory);
+    const position = positionId ? positionsById.get(positionId) : undefined;
+    const system = position ? systemsById.get(position.systemId) : undefined;
+    return position ? `${system?.name ?? "System"} · ${position.name}` : "Not placed";
+  }
+
+  const locationsByEmployee = new Map(scheduled.map((employee) => [employee.id, resolveLocation(employee)]));
+  const locationFor = (employee: Employee) => locationsByEmployee.get(employee.id) ?? "Not placed";
+  const positioned = Array.from(locationsByEmployee.values()).filter((location) => location !== "Not placed").length;
+  const overtimeHours = dayOvertime.reduce((sum, entry) => sum + entry.hours, 0);
+  const ptoHours = dayPto.reduce((sum, entry) => sum + entry.hours, 0);
+  const overtimePeople = new Set(dayOvertime.map((entry) => entry.employeeId)).size;
+
+  return <div className="day-snapshot">
+    <div className={`day-snapshot-banner ${workingColor.toLowerCase()}`}>
+      <div><ShiftBadge color={workingColor} /><div><strong>{workingColor} crews scheduled</strong><span>Day and Night roster for {prettyDate(date)}</span></div></div>
+      {isAdmin && <button className="secondary-button" onClick={onCorrect}>Correct scheduled shift</button>}
+    </div>
+    <section className="snapshot-summary" aria-label="Day totals">
+      <div><span>Scheduled crew</span><strong>{scheduled.length}</strong><small>Blue/Yellow Day & Night</small></div>
+      <div><span>Positioned</span><strong>{positioned}</strong><small>{Math.max(0, scheduled.length - positioned)} not placed</small></div>
+      <div><span>PTO recorded</span><strong>{ptoHours.toFixed(1)} <small>hrs</small></strong><small>{dayPto.length} entries</small></div>
+      <div><span>Overtime coverage</span><strong>{overtimeHours.toFixed(1)} <small>hrs</small></strong><small>{overtimePeople} employees</small></div>
+    </section>
+    {!data.crewPlacementReady && <div className="snapshot-note">Crew placement storage is not active, so position history is unavailable.</div>}
+    <div className="snapshot-shifts">
+      <DayCrewRoster period="Day" employees={scheduled.filter((employee) => employee.shiftPeriod === "Day")} locationFor={locationFor} ptoByEmployee={ptoByEmployee} />
+      <DayCrewRoster period="Night" employees={scheduled.filter((employee) => employee.shiftPeriod === "Night")} locationFor={locationFor} ptoByEmployee={ptoByEmployee} />
+    </div>
+    <div className="snapshot-activity-grid">
+      <section className="snapshot-section">
+        <div className="snapshot-section-head"><div><p className="eyebrow">Added coverage</p><h3>Overtime worked</h3></div><span>{dayOvertime.length} entries</span></div>
+        {dayOvertime.length ? <div className="day-activity-list">{dayOvertime.map((entry) => <div className="day-activity-row" key={entry.id}><span className="avatar">{initials(entry.employeeName)}</span><div><strong>{entry.employeeName}</strong><small>{entry.departmentName} · {entry.costCode}</small><small>{entry.reason}{entry.notes ? ` · ${entry.notes}` : ""}</small></div><b>{entry.hours.toFixed(1)} hrs</b></div>)}</div> : <EmptyState title="No overtime recorded" body="Overtime coverage for this date will appear here." />}
+      </section>
+      <section className="snapshot-section">
+        <div className="snapshot-section-head"><div><p className="eyebrow">Time away</p><h3>PTO recorded</h3></div><span>{dayPto.length} entries</span></div>
+        {dayPto.length ? <div className="day-activity-list">{dayPto.map((entry) => { const employee = employeesById.get(entry.employeeId); return <div className="day-activity-row" key={entry.id}><span className="avatar">{initials(employee?.name ?? "Unknown")}</span><div><strong>{employee?.name ?? "Unknown"}</strong><small>{employee?.department ?? "No department"} · {entry.ptoType}</small><small>{entry.notes || `${employee?.shiftColor ?? ""} ${employee?.shiftPeriod ?? ""}`.trim() || "No notes"}</small></div><b>{entry.hours.toFixed(1)} hrs</b></div>; })}</div> : <EmptyState title="No PTO recorded" body="PTO for this date will appear here." />}
+      </section>
+    </div>
+  </div>;
+}
+
+function DayCrewRoster({ period, employees, locationFor, ptoByEmployee }: { period: "Day" | "Night"; employees: Employee[]; locationFor: (employee: Employee) => string; ptoByEmployee: Map<string, PtoEntry[]> }) {
+  return <section className="snapshot-section roster-snapshot">
+    <div className="snapshot-section-head"><div><p className="eyebrow">Scheduled roster</p><h3>{period} shift</h3></div><span>{employees.length} employees</span></div>
+    {employees.length ? <div className="day-roster-list">{employees.map((employee) => { const pto = ptoByEmployee.get(employee.id) ?? []; const ptoHours = pto.reduce((sum, entry) => sum + entry.hours, 0); return <div className="day-roster-row" key={employee.id}><div className="day-person"><span className="avatar">{initials(employee.name)}</span><div><strong>{employee.name}</strong><small>{employee.department}</small></div></div><div className={`day-location ${locationFor(employee) === "Not placed" ? "missing" : ""}`}><span>System / position</span><strong>{locationFor(employee)}</strong></div><span className={`day-status ${pto.length ? "pto" : "working"}`}>{pto.length ? `PTO · ${ptoHours.toFixed(1)} hrs` : "Scheduled"}</span></div>; })}</div> : <EmptyState title={`No ${period.toLowerCase()} employees`} body="There are no active employees assigned to this crew." />}
+  </section>;
 }
 
 function ReportTable({ overtime, pto, employeesById }: { overtime: OvertimeEntry[]; pto: PtoEntry[]; employeesById: Map<string, Employee> }) {
