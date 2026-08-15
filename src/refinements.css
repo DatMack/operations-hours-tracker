@@ -1,0 +1,14 @@
+.page-heading .eyebrow,
+.panel-head .eyebrow,
+.snapshot-section-head .eyebrow,
+.calendar-legend,
+.settings-grid > .settings-panel:nth-child(2),
+.schedule-banner > span {
+  display: none !important;
+}
+
+.page-heading h1,
+.panel-head h2,
+.snapshot-section-head h3 {
+  margin-top: 0;
+}
