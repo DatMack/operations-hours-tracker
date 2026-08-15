@@ -71,7 +71,7 @@ export type CrewPosition = { id: string; systemId: string; name: string; sortOrd
 export type CrewPlacement = { employeeId: string; positionId: string; shiftColor: ShiftColor; shiftPeriod: "Day" | "Night"; updatedBy: string; updatedAt: string };
 export type CrewPlacementHistory = { id: string; employeeId: string; previousPositionId?: string; nextPositionId?: string; changedBy: string; changedAt: string };
 export type TrackerBundle = {
-  backend: "supabase";
+  backend: "supabase" | "local-demo";
   session: Profile;
   departments: Department[];
   employees: Employee[];
