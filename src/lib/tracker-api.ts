@@ -297,6 +297,19 @@ async function allEntryRows(table: "overtime_entries" | "pto_entries", dateColum
   return rows;
 }
 
+async function allCrewPlacementHistoryRows() {
+  const rows: unknown[] = [];
+  const pageSize = 1000;
+  for (let start = 0; ; start += pageSize) {
+    const result = await supabase.from("crew_placement_history").select("*").order("changed_at", { ascending: false }).range(start, start + pageSize - 1);
+    if (result.error) return { data: [], error: result.error };
+    const page = result.data ?? [];
+    rows.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return { data: rows, error: null };
+}
+
 function selectedDepartment(rows: DepartmentRow[], idValue: unknown, nameValue?: unknown) {
   const id = textValue(idValue, 80);
   const name = textValue(nameValue, 100).toLowerCase();
@@ -327,7 +340,7 @@ export async function loadBundle(): Promise<TrackerBundle> {
     supabase.from("crew_systems").select("*").order("sort_order").order("name"),
     supabase.from("crew_positions").select("*").order("sort_order").order("name"),
     supabase.from("crew_placements").select("*").order("updated_at", { ascending: false }),
-    supabase.from("crew_placement_history").select("*").order("changed_at", { ascending: false }).limit(250),
+    allCrewPlacementHistoryRows(),
   ]);
   check(departmentResult.error, "load departments");
   check(employeeResult.error, "load employees");
