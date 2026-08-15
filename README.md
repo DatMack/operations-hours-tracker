@@ -23,6 +23,15 @@ A private, role-based overtime, PTO, employee, department, and 2-2-3 shift track
 
 The Supabase **publishable** key is intentionally used by the browser. It is not a password; RLS protects the data. Never add a Supabase secret key or service-role key to this repository or to browser code.
 
+## Public interactive demo
+
+The sign-in page includes **Open demo workspace** for visitors who do not have an
+account. The demo uses a separate fake roster, sample OT/PTO activity, schedules,
+dashboard preferences, and crew placements. Demo edits are stored only in that
+visitor's browser with `localStorage`; they never read from or write to Supabase.
+Visitors can reset the sample at any time from the demo banner or exit back to the
+secure sign-in screen.
+
 ## Security controls
 
 - No anonymous table access; approved Supabase Auth users only.

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import CrewPlacement from "./CrewPlacement";
 import { crewPositionAtEndOfDay } from "./lib/day-snapshot";
+import { loadDemoBundle, mutateDemoTracker, resetDemoBundle } from "./lib/demo-store";
 import { shiftForDate, toDateInput, type ShiftColor } from "./lib/schedule";
 import {
   loadBundle,
@@ -142,7 +143,7 @@ function Modal({ title, onClose, children, wide = false }: { title: string; onCl
   );
 }
 
-export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unknown> }) {
+export default function TrackerApp({ onSignOut, dataMode = "live" }: { onSignOut: () => Promise<unknown>; dataMode?: "live" | "demo" }) {
   const [data, setData] = useState<TrackerBundle | null>(null);
   const [tab, setTab] = useState<Tab>("dashboard");
   const [error, setError] = useState("");
@@ -181,13 +182,16 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
   const [reportReason, setReportReason] = useState("all");
   const [colorMode, setColorMode] = useState<ColorMode>(() => (localStorage.getItem("operations-hours-color-mode") as ColorMode) || "system");
   const resolvedColorMode = colorMode === "system" ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : colorMode;
+  const isDemo = dataMode === "demo";
+  const loadData = isDemo ? loadDemoBundle : loadBundle;
+  const mutateData = isDemo ? mutateDemoTracker : mutateTracker;
 
   useEffect(() => { localStorage.setItem("operations-hours-color-mode", colorMode); }, [colorMode]);
 
   async function load() {
     try {
       setError("");
-      setData(await loadBundle());
+      setData(await loadData());
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Unable to load tracker data.");
     }
@@ -195,13 +199,13 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
 
   useEffect(() => {
     let active = true;
-    void loadBundle()
+    void loadData()
       .then((body) => { if (active) setData(body); })
       .catch((loadError: unknown) => {
         if (active) setError(loadError instanceof Error ? loadError.message : "Unable to load tracker data.");
       });
     return () => { active = false; };
-  }, []);
+  }, [dataMode]);
 
   useEffect(() => {
     if (!assignmentDefaultsApplied && data?.session.role === "supervisor") {
@@ -217,7 +221,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
     setError("");
     setNotice("");
     try {
-      setData(await mutateTracker(payload));
+      setData(await mutateData(payload));
       setNotice(success);
       window.setTimeout(() => setNotice(""), 3500);
       return true;
@@ -235,6 +239,34 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
   const canWrite = data?.session.role === "admin" || data?.session.role === "supervisor";
   const isAdmin = data?.session.role === "admin";
   const visibleNav = NAV.filter((item) => (item.id !== "admin" && item.id !== "companySetup") || isAdmin);
+
+  async function resetDemo() {
+    if (!isDemo || !window.confirm("Reset every local demo change and restore the original fake sample data?")) return;
+    setBusy(true);
+    setError("");
+    try {
+      setData(await resetDemoBundle());
+      setNotice("Demo data restored to the original sample.");
+      setTab("dashboard");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function previewDemoRole(role: Profile["role"]) {
+    if (!isDemo) return;
+    setBusy(true);
+    setError("");
+    try {
+      setData(await mutateDemoTracker({ action: "set_demo_role", role }));
+      setTab("dashboard");
+      setNotice(`Demo is now showing the ${role} experience.`);
+    } catch (roleError) {
+      setError(roleError instanceof Error ? roleError.message : "The demo role could not be changed.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   if (!data) {
     return (
@@ -322,8 +354,8 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
   return (
     <div className={`app-shell theme-${resolvedColorMode}`}>
       <header className="topbar">
-        <div className="brand"><div className="brand-box">OT</div><div><strong>Overtime & PTO</strong><span>Company operations tracker · Supabase</span></div></div>
-        <div className="account"><span className="status-dot" /><div><strong>{data.session.fullName}</strong><span>{data.session.role}{data.session.role === "supervisor" ? ` · ${data.departments.find((department) => department.id === data.session.departmentId)?.name ?? "Unassigned"} · ${data.session.shiftColor ?? "Unassigned"} ${data.session.shiftPeriod ?? ""}`.trimEnd() : ""}</span></div><button className="signout-button" onClick={() => void onSignOut()}>Sign out</button></div>
+        <div className="brand"><div className="brand-box">OT</div><div><strong>Overtime & PTO</strong><span>{isDemo ? "Interactive sample workspace · saved locally" : "Company operations tracker · Supabase"}</span></div></div>
+        <div className="account"><span className="status-dot" /><div><strong>{data.session.fullName}</strong><span>{data.session.role}{data.session.role === "supervisor" ? ` · ${data.departments.find((department) => department.id === data.session.departmentId)?.name ?? "Unassigned"} · ${data.session.shiftColor ?? "Unassigned"} ${data.session.shiftPeriod ?? ""}`.trimEnd() : ""}</span></div><button className="signout-button" onClick={() => void onSignOut()}>{isDemo ? "Exit demo" : "Sign out"}</button></div>
       </header>
 
       <nav className="main-nav" aria-label="Tracker pages">
@@ -331,11 +363,12 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
       </nav>
 
       <main className="content">
+        {isDemo && <section className="demo-mode-banner"><div><span className="demo-mode-mark">D</span><div><strong>Interactive demo mode</strong><small>Everything here is fake. Changes are saved only in this browser and are never sent to the live company database.</small></div></div><div className="demo-mode-actions"><label><span>Preview as</span><select value={data.session.role} disabled={busy} onChange={(event) => void previewDemoRole(event.target.value as Profile["role"])}><option value="admin">Administrator</option><option value="supervisor">Supervisor</option><option value="viewer">Viewer</option></select></label><button className="secondary-button" disabled={busy} onClick={() => void resetDemo()}>Reset demo data</button></div></section>}
         {(error || notice) && <div className={`alert ${error ? "error" : "success"}`}><span>{error ? "!" : "✓"}</span>{error || notice}<button onClick={() => { setError(""); setNotice(""); }}>×</button></div>}
 
         {tab === "dashboard" && (
           <>
-            <div className="page-heading"><div><p className="eyebrow">Your operations workspace</p><h1>Dashboard</h1><span>{prettyDate(selectedDate)} · {data.dashboardPersistenceReady ? `Saved personally for ${data.session.fullName}` : "Using the company default layout"}</span></div><div className="dashboard-heading-actions"><label className="date-control"><span>View date</span><input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label><button className="secondary-button" disabled={!data.dashboardPersistenceReady} title={data.dashboardPersistenceReady ? undefined : "Personal dashboard storage is still being configured."} onClick={() => setCustomizingDashboard(true)}>{data.dashboardPersistenceReady ? "Customize dashboard" : "Default dashboard active"}</button></div></div>
+            <div className="page-heading"><div><p className="eyebrow">Your operations workspace</p><h1>Dashboard</h1><span>{prettyDate(selectedDate)} · {data.dashboardPersistenceReady ? isDemo ? `Saved locally for ${data.session.fullName}` : `Saved personally for ${data.session.fullName}` : "Using the company default layout"}</span></div><div className="dashboard-heading-actions"><label className="date-control"><span>View date</span><input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label><button className="secondary-button" disabled={!data.dashboardPersistenceReady} title={data.dashboardPersistenceReady ? undefined : "Personal dashboard storage is still being configured."} onClick={() => setCustomizingDashboard(true)}>{data.dashboardPersistenceReady ? "Customize dashboard" : "Default dashboard active"}</button></div></div>
             {!activeEmployees.length && <section className="setup-banner"><div><span className="setup-number">1</span><div><strong>Your tracker is clean and ready</strong><span>Confirm departments, then add employees individually or import the complete roster.</span></div></div><div className="button-row">{isAdmin && <button className="secondary-button" onClick={() => setTab("companySetup")}>Review departments</button>}<button className="primary-button" onClick={() => setTab("employees")}>Add employees</button></div></section>}
             {data.dashboardWidgets.length ? <section className="dashboard-widget-grid">{data.dashboardWidgets.map((widget) => <DashboardWidgetView key={widget.id} widget={widget} data={data} selectedDate={selectedDate} workingColor={workingColor} activeEmployees={activeEmployees} activeDepartments={activeDepartments} monthOt={monthOt} monthPto={monthPto} selectedOt={selectedOt} selectedPto={selectedPto} employeesById={employeesById} onNavigate={setTab} />)}</section> : <section className="panel dashboard-empty"><EmptyState title="Your dashboard is empty" body="Choose Customize dashboard to add the metrics, charts, and daily details you want to see." /><button className="primary-button" onClick={() => setCustomizingDashboard(true)}>Add dashboard widgets</button></section>}
           </>
@@ -405,7 +438,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
             <div className="page-heading"><div><p className="eyebrow">Your workspace</p><h1>Settings</h1><span>Personalize how the tracker looks and behaves for you.</span></div></div>
             <section className="settings-grid">
               <div className="panel settings-panel"><div className="panel-head"><div><p className="eyebrow">Appearance</p><h2>Color mode</h2></div></div><div className="settings-panel-body"><p>Choose the appearance that is easiest on your eyes. This setting is saved on this device.</p><div className="appearance-options" role="radiogroup" aria-label="Color mode">{(["light", "dark", "system"] as ColorMode[]).map((mode) => <button key={mode} type="button" className={colorMode === mode ? "selected" : ""} onClick={() => setColorMode(mode)} role="radio" aria-checked={colorMode === mode}><span className={`appearance-preview ${mode}`}><i /></span><strong>{mode === "system" ? "Use device setting" : `${mode[0].toUpperCase()}${mode.slice(1)} mode`}</strong><small>{mode === "system" ? "Follows your computer or phone" : mode === "dark" ? "Lower-light workspace" : "Bright, clean workspace"}</small></button>)}</div></div></div>
-              <div className="panel settings-panel"><div className="panel-head"><div><p className="eyebrow">Dashboard</p><h2>Dashboard preferences</h2></div></div><div className="settings-panel-body"><p>Your dashboard already has its own Customize dashboard button. It is where you choose the cards and charts you want to see and save the layout to your account.</p><div className="settings-note"><span>✓</span><div><strong>Default dashboard is active</strong><small>Use the button at the top of Dashboard to personalize your view whenever dashboard storage is ready.</small></div></div></div></div>
+              <div className="panel settings-panel"><div className="panel-head"><div><p className="eyebrow">Dashboard</p><h2>Dashboard preferences</h2></div></div><div className="settings-panel-body"><p>Your dashboard already has its own Customize dashboard button. It is where you choose the cards and charts you want to see and save the layout {isDemo ? "in this browser" : "to your account"}.</p><div className="settings-note"><span>✓</span><div><strong>{isDemo ? "Local demo dashboard is active" : "Default dashboard is active"}</strong><small>Use the button at the top of Dashboard to personalize your view{isDemo ? "; it remains available on this device until you reset the demo" : " whenever dashboard storage is ready"}.</small></div></div></div></div>
             </section>
           </>
         )}
@@ -441,7 +474,7 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
               </div>
               <div className="panel"><div className="panel-head"><div><p className="eyebrow">Audit history</p><h2>Recent changes</h2></div></div><div className="audit-list">{data.auditLog.length ? data.auditLog.slice(0, 20).map((item) => <div key={item.id}><span className="audit-dot" /><div><strong>{item.action} {item.entityType.replaceAll("_", " ")}</strong><small>{item.userEmail} · {timestampDate(item.createdAt).toLocaleString()}</small></div></div>) : <EmptyState title="No changes yet" body="Administrative and entry changes will be recorded here." />}</div></div>
             </section>
-            <section className="security-strip"><div className="lock-mark">✓</div><div><strong>Company pilot protections</strong><span>Supabase login, approved roles, forced row-level security, database validation, historical snapshots, and tamper-resistant audit history are enabled.</span></div></section>
+            <section className="security-strip"><div className="lock-mark">✓</div><div><strong>{isDemo ? "Safe local preview" : "Company pilot protections"}</strong><span>{isDemo ? "These fake profiles and audit entries exist only in this browser. Use Preview as above to compare administrator, supervisor, and viewer access." : "Supabase login, approved roles, forced row-level security, database validation, historical snapshots, and tamper-resistant audit history are enabled."}</span></div></section>
           </>
         )}
       </main>
@@ -452,10 +485,10 @@ export default function TrackerApp({ onSignOut }: { onSignOut: () => Promise<unk
       {overrideDate && <Modal title="Correct scheduled shift" onClose={() => setOverrideDate(null)}><OverrideForm date={overrideDate} current={shiftForDate(overrideDate, data.scheduleOverrides)} override={data.scheduleOverrides.find((item) => item.workDate === overrideDate)} busy={busy} onSave={async (values) => { const ok = await mutate({ action: "set_override", workDate: overrideDate, ...values }, "Schedule correction saved."); if (ok) setOverrideDate(null); }} onRemove={async () => { const ok = await mutate({ action: "delete_override", workDate: overrideDate }, "Schedule correction removed."); if (ok) setOverrideDate(null); }} /></Modal>}
       {editingEmployee && <Modal title={editingEmployee.id ? "Edit employee" : "Add employee"} onClose={() => setEditingEmployee(null)}><EmployeeForm employee={editingEmployee} departments={data.departments} busy={busy} onSave={async (values) => { const ok = await mutate({ action: editingEmployee.id ? "update_employee" : "add_employee", id: editingEmployee.id, ...values }, editingEmployee.id ? "Employee updated." : "Employee added."); if (ok) setEditingEmployee(null); }} /></Modal>}
       {editingDepartment && <Modal title={editingDepartment.id ? "Edit department" : "Add department"} onClose={() => setEditingDepartment(null)}><DepartmentForm department={editingDepartment} activeEmployeeCount={activeEmployees.filter((employee) => employee.departmentId === editingDepartment.id).length} busy={busy} onSave={async (values) => { const ok = await mutate({ action: editingDepartment.id ? "update_department" : "add_department", id: editingDepartment.id, ...values }, editingDepartment.id ? "Department updated." : "Department added."); if (ok) setEditingDepartment(null); }} /></Modal>}
-      {editingProfile && <Modal title="Update user access" onClose={() => setEditingProfile(null)}><ProfileForm profile={editingProfile} departments={data.departments} busy={busy} currentUserEmail={data.session.email} onSave={async (values) => { const ok = await mutate({ action: "update_profile", originalEmail: editingProfile.email, ...values }, "User access updated."); if (ok) setEditingProfile(null); }} onDelete={async () => { const ok = await mutate({ action: "delete_profile", email: editingProfile.email }, "User access deleted."); if (ok) setEditingProfile(null); }} /></Modal>}
-      {addingProfile && <Modal title="Add new person" onClose={() => setAddingProfile(false)}><ProfileForm departments={data.departments} busy={busy} currentUserEmail={data.session.email} onSave={async (values) => { const ok = await mutate({ action: "add_profile", ...values }, "New user access added."); if (ok) setAddingProfile(false); }} /></Modal>}
+      {editingProfile && <Modal title="Update user access" onClose={() => setEditingProfile(null)}><ProfileForm profile={editingProfile} departments={data.departments} busy={busy} currentUserEmail={data.session.email} localDemo={isDemo} onSave={async (values) => { const ok = await mutate({ action: "update_profile", originalEmail: editingProfile.email, ...values }, "User access updated."); if (ok) setEditingProfile(null); }} onDelete={async () => { const ok = await mutate({ action: "delete_profile", email: editingProfile.email }, "User access deleted."); if (ok) setEditingProfile(null); }} /></Modal>}
+      {addingProfile && <Modal title="Add new person" onClose={() => setAddingProfile(false)}><ProfileForm departments={data.departments} busy={busy} currentUserEmail={data.session.email} localDemo={isDemo} onSave={async (values) => { const ok = await mutate({ action: "add_profile", ...values }, "New user access added."); if (ok) setAddingProfile(false); }} /></Modal>}
       {customizingDashboard && <Modal title="Customize your dashboard" wide onClose={() => setCustomizingDashboard(false)}><DashboardCustomizer initial={data.dashboardWidgets} busy={busy} onSave={async (widgets) => { const ok = await mutate({ action: "save_dashboard_layout", widgets }, "Your dashboard layout was saved."); if (ok) setCustomizingDashboard(false); }} /></Modal>}
-      {importKind && <Modal title={importKind === "employees" ? "Import employee roster" : "Import overtime & PTO history"} onClose={() => setImportKind(null)}><ImportForm kind={importKind} busy={busy} onImport={async (rows) => { const ok = await mutate({ action: importKind === "employees" ? "import_employees" : "import_history", rows }, importKind === "employees" ? "Employee roster imported." : "Historical records imported."); if (ok) setImportKind(null); }} /></Modal>}
+      {importKind && <Modal title={importKind === "employees" ? "Import employee roster" : "Import overtime & PTO history"} onClose={() => setImportKind(null)}><ImportForm kind={importKind} busy={busy} localDemo={isDemo} onImport={async (rows) => { const ok = await mutate({ action: importKind === "employees" ? "import_employees" : "import_history", rows }, importKind === "employees" ? "Employee roster imported." : "Historical records imported."); if (ok) setImportKind(null); }} /></Modal>}
     </div>
   );
 }
@@ -612,7 +645,7 @@ function DepartmentForm({ department, activeEmployeeCount, busy, onSave }: { dep
   return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const active = activeEmployeeCount > 0 && department.active ? true : form.get("active") === "on"; void onSave({ name: form.get("name"), defaultCostCode: form.get("defaultCostCode"), active }); }}><p className="modal-copy">The default cost code fills automatically when this department is selected for overtime. Supervisors can still enter a different code when needed.</p><label><span>Department name</span><input name="name" defaultValue={department.name} maxLength={100} required autoFocus /></label><label><span>Default cost code</span><input name="defaultCostCode" defaultValue={department.defaultCostCode} maxLength={50} placeholder="Example: EXT-100" required /></label><label className="checkbox-label"><input type="checkbox" name="active" defaultChecked={department.active} disabled={activeEmployeeCount > 0 && department.active} /><span>Active department{activeEmployeeCount > 0 && department.active ? ` · ${activeEmployeeCount} active employees must be moved or deactivated first` : ""}</span></label><div className="privacy-note"><strong>Historical records are protected</strong><span>Renaming this department updates current employee assignments. Existing overtime keeps its original department snapshot.</span></div><button className="primary-button full" disabled={busy}>{busy ? "Saving…" : "Save department"}</button></form>;
 }
 
-function ProfileForm({ profile, departments, busy, currentUserEmail, onSave, onDelete }: { profile?: Profile; departments: Department[]; busy: boolean; currentUserEmail: string; onSave: (values: Record<string, unknown>) => Promise<void>; onDelete?: () => Promise<void> }) {
+function ProfileForm({ profile, departments, busy, currentUserEmail, localDemo = false, onSave, onDelete }: { profile?: Profile; departments: Department[]; busy: boolean; currentUserEmail: string; localDemo?: boolean; onSave: (values: Record<string, unknown>) => Promise<void>; onDelete?: () => Promise<void> }) {
   const [role, setRole] = useState(profile?.role ?? "supervisor");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const selectableDepartments = departments.filter((department) => department.active || department.id === profile?.departmentId);
@@ -628,7 +661,7 @@ function ProfileForm({ profile, departments, busy, currentUserEmail, onSave, onD
       <small className="form-help">Department, shift color, and period are required for supervisors.</small>
     </>}
     <label className="checkbox-label"><input type="checkbox" name="active" defaultChecked={profile?.active ?? true} /><span>Active account</span></label>
-    <div className="privacy-note"><strong>{profile ? "Email updates replace this selected record" : "Supabase Authentication is still required"}</strong><span>{profile ? "Changing this email will not create a duplicate tracker profile. The user's Supabase Authentication email must also match before they can sign in." : "Create or invite the matching Supabase Authentication user with this exact email."}</span></div>
+    <div className="privacy-note"><strong>{localDemo ? "Fake demo access only" : profile ? "Email updates replace this selected record" : "Supabase Authentication is still required"}</strong><span>{localDemo ? "This sample profile is saved only in this browser and cannot sign in to the live tracker." : profile ? "Changing this email will not create a duplicate tracker profile. The user's Supabase Authentication email must also match before they can sign in." : "Create or invite the matching Supabase Authentication user with this exact email."}</span></div>
     {confirmDelete && <div className="delete-confirm"><strong>Delete tracker access for {profile?.fullName}?</strong><span>This removes the approved tracker profile and records the deletion in Audit history. It does not delete the person's Supabase Authentication account.</span><div className="button-row"><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirmDelete(false)}>Cancel</button><button type="button" className="danger-button" disabled={busy} onClick={() => void onDelete?.()}>{busy ? "Deleting…" : "Confirm delete"}</button></div></div>}
     {!confirmDelete && <div className="button-row">{profile && onDelete && <button type="button" className="danger-button" disabled={busy || currentUser} title={currentUser ? "You cannot delete the account currently signed in." : undefined} onClick={() => setConfirmDelete(true)}>Delete user access</button>}<button className="primary-button" disabled={busy || (role === "supervisor" && !selectableDepartments.length)}>{busy ? "Saving…" : profile ? "Update user" : "Add person"}</button></div>}
     {currentUser && <small className="form-help">Your currently signed-in administrator account cannot be deleted from its own session.</small>}
@@ -681,7 +714,7 @@ function downloadImportTemplate(kind: ImportKind) {
   URL.revokeObjectURL(url);
 }
 
-function ImportForm({ kind, busy, onImport }: { kind: ImportKind; busy: boolean; onImport: (rows: Array<Record<string, unknown>>) => Promise<void> }) {
+function ImportForm({ kind, busy, localDemo = false, onImport }: { kind: ImportKind; busy: boolean; localDemo?: boolean; onImport: (rows: Array<Record<string, unknown>>) => Promise<void> }) {
   const [file, setFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState("");
   const employeeImport = kind === "employees";
@@ -702,7 +735,7 @@ function ImportForm({ kind, busy, onImport }: { kind: ImportKind; busy: boolean;
     }
   }
 
-  return <form className="modal-form import-form" onSubmit={(event) => void submit(event)}><p className="modal-copy">{employeeImport ? "Department names must already exist in Company Setup. Existing employees with the same name are updated instead of duplicated." : "Import overtime and PTO after the roster is loaded. Employee and department names must match exactly; duplicate OT is skipped by employee, date, department, and cost code."}</p><div className="template-box"><div><strong>Use the import template</strong><span>{employeeImport ? "Columns: name, shift_color, shift_period, department, active" : "Columns: type, date, employee_name, hours, department, code_or_type, reason, notes"}</span></div><button type="button" className="secondary-button" onClick={() => downloadImportTemplate(kind)}>Download template</button></div><label className="file-picker"><span>Completed CSV file</span><input type="file" accept=".csv,text/csv" onChange={(event) => { setFile(event.target.files?.[0] ?? null); setFileError(""); }} /></label>{fileError && <div className="field-error">{fileError}</div>}<div className="privacy-note"><strong>Company data reminder</strong><span>Only import real employee or PTO information after your company has approved this private pilot.</span></div><button className="primary-button full" disabled={busy || !file}>{busy ? "Importing…" : employeeImport ? "Import employees" : "Import historical records"}</button></form>;
+  return <form className="modal-form import-form" onSubmit={(event) => void submit(event)}><p className="modal-copy">{employeeImport ? "Department names must already exist in Company Setup. Existing employees with the same name are updated instead of duplicated." : "Import overtime and PTO after the roster is loaded. Employee and department names must match exactly; duplicate OT is skipped by employee, date, department, and cost code."}</p><div className="template-box"><div><strong>Use the import template</strong><span>{employeeImport ? "Columns: name, shift_color, shift_period, department, active" : "Columns: type, date, employee_name, hours, department, code_or_type, reason, notes"}</span></div><button type="button" className="secondary-button" onClick={() => downloadImportTemplate(kind)}>Download template</button></div><label className="file-picker"><span>Completed CSV file</span><input type="file" accept=".csv,text/csv" onChange={(event) => { setFile(event.target.files?.[0] ?? null); setFileError(""); }} /></label>{fileError && <div className="field-error">{fileError}</div>}<div className="privacy-note"><strong>{localDemo ? "Use fake data in the demo" : "Company data reminder"}</strong><span>{localDemo ? "This import remains in your browser, but sample information is still best for a public preview." : "Only import real employee or PTO information after your company has approved this private pilot."}</span></div><button className="primary-button full" disabled={busy || !file}>{busy ? "Importing…" : employeeImport ? "Import employees" : "Import historical records"}</button></form>;
 }
 
 function OverrideForm({ date, current, override, busy, onSave, onRemove }: { date: string; current: ShiftColor; override?: Override; busy: boolean; onSave: (values: Record<string, unknown>) => Promise<void>; onRemove: () => Promise<void> }) {

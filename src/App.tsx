@@ -8,6 +8,7 @@ const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000;
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
 
   useEffect(() => {
     void supabase.auth.getSession().then(({ data }) => {
@@ -37,7 +38,8 @@ export default function App() {
   }, [session]);
 
   if (!ready) return <AuthLoading />;
-  if (!session) return <LoginScreen />;
+  if (demoMode) return <TrackerApp dataMode="demo" onSignOut={() => { setDemoMode(false); return Promise.resolve(); }} />;
+  if (!session) return <LoginScreen onStartDemo={() => setDemoMode(true)} />;
 
   return <TrackerApp onSignOut={() => supabase.auth.signOut()} />;
 }
@@ -55,7 +57,7 @@ function AuthLoading() {
   );
 }
 
-function LoginScreen() {
+function LoginScreen({ onStartDemo }: { onStartDemo: () => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -96,6 +98,12 @@ function LoginScreen() {
           </label>
           <button className="primary-button full" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
         </form>
+        <div className="auth-divider"><span>or explore first</span></div>
+        <section className="demo-entry">
+          <div><p className="eyebrow">No account needed</p><h2>Try the interactive demo</h2></div>
+          <p>Explore the full tracker with fake employees and sample activity. Your changes save only in this browser and never touch company data.</p>
+          <button type="button" className="demo-button" onClick={onStartDemo}>Open demo workspace <span>→</span></button>
+        </section>
         <div className="privacy-note">
           <strong>Approved access only</strong>
           <span>Accounts are created by the tracker administrator. Employee information is protected by Supabase authentication and database security policies. Inactive sessions sign out after 30 minutes.</span>
