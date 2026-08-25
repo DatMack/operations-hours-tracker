@@ -398,6 +398,13 @@ export async function mutateDemoTracker(payload: Record<string, unknown>): Promi
       bundle.crewPlacements = bundle.crewPlacements.filter((item) => item.employeeId !== employee.id);
     }
     addAudit(bundle, action === "add_employee" ? "Add employee" : "Update employee", "employee", name);
+  } else if (action === "delete_employee") {
+    const employee = employeeFor(bundle, payload.id);
+    if (bundle.overtimeEntries.some((entry) => entry.employeeId === employee.id) || bundle.ptoEntries.some((entry) => entry.employeeId === employee.id)) throw new Error("This employee has overtime or PTO history. Mark them inactive instead so those records remain intact.");
+    bundle.employees = bundle.employees.filter((item) => item.id !== employee.id);
+    bundle.crewPlacements = bundle.crewPlacements.filter((item) => item.employeeId !== employee.id);
+    bundle.crewPlacementHistory = bundle.crewPlacementHistory.filter((item) => item.employeeId !== employee.id);
+    addAudit(bundle, "Delete employee", "employee", employee.name);
   } else if (action === "import_employees") {
     const rows = Array.isArray(payload.rows) ? payload.rows.slice(0, 1000) : [];
     if (!rows.length) throw new Error("At least one employee row is required.");
