@@ -28,7 +28,7 @@ test("an unassignment remains visible in later historical snapshots", () => {
   assert.equal(crewPositionAtEndOfDay("employee-1", "2026-08-15", [], history), undefined);
 });
 
-test("the shift calendar exposes a complete day snapshot to every approved role", async () => {
+test("the shift calendar keeps daily activity compact and moves the roster into a separate system view", async () => {
   const [app, api, styles] = await Promise.all([
     read("src/TrackerApp.tsx"),
     read("src/lib/tracker-api.ts"),
@@ -37,7 +37,11 @@ test("the shift calendar exposes a complete day snapshot to every approved role"
 
   assert.match(app, /onClick=\{\(\) => onSelect\(dateValue\)\}/, "Calendar days should open for viewers as well as admins");
   assert.doesNotMatch(app, /disabled=\{!isAdmin\}/, "Viewer calendar dates must not be disabled");
-  for (const label of ["Scheduled crew", "System / position", "Overtime worked", "PTO recorded"]) assert.match(app, new RegExp(label));
+  for (const label of ["See who worked", "Overtime worked", "PTO recorded", "Who worked"]) assert.match(app, new RegExp(label));
+  assert.doesNotMatch(app, /<span>Scheduled crew<\/span>/, "The daily activity popup must not be cluttered with active employee totals");
+  assert.match(app, /function CalendarWorkedSnapshot[\s\S]*worked-system-grid/, "The separate workforce popup must group people by system");
+  assert.match(app, /aria-current=\{isToday \? "date" : undefined\}/, "Today must be identified accessibly");
+  assert.match(styles, /\.calendar-day\.today/, "Today needs a clear visual treatment");
   assert.match(app, /Correct scheduled shift/, "Admins must retain schedule correction access inside the snapshot");
   assert.match(api, /allCrewPlacementHistoryRows/, "Historical day views must load complete placement history instead of only recent moves");
   assert.match(styles, /\.theme-dark \.day-snapshot-banner\.blue/, "The day snapshot must have an explicit dark-mode treatment");

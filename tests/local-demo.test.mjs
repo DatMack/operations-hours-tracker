@@ -34,7 +34,7 @@ test("local demo mutations cover every editable tracker workflow", async () => {
   for (const action of [
     "save_dashboard_layout", "add_crew_system", "update_crew_system", "add_crew_position", "update_crew_position",
     "assign_crew_position", "clear_crew_placement", "add_department", "update_department", "add_employee",
-    "update_employee", "import_employees", "add_overtime", "update_overtime", "delete_overtime", "add_pto",
+    "update_employee", "delete_employee", "import_employees", "add_overtime", "update_overtime", "delete_overtime", "add_pto",
     "set_demo_role", "delete_pto", "import_history", "set_override", "delete_override", "add_profile", "update_profile", "delete_profile",
   ]) assert.match(demo, new RegExp(`action === "${action}"|action === "[^\"]+" \\|\\| action === "${action}"`), `${action} must work in the local demo`);
 });

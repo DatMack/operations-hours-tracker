@@ -509,6 +509,19 @@ export async function mutateTracker(payload: Record<string, unknown>): Promise<T
     if (!selected.active) throw new Error("Select an active department.");
     const result = await supabase.from("employees").update({ name, shift_color: shiftColor, shift_period: shiftPeriod, department_id: selected.id, department: selected.name, active: Boolean(payload.active) }).eq("id", id);
     check(result.error, "update the employee");
+  } else if (action === "delete_employee") {
+    requireAdmin(session.role);
+    const id = textValue(payload.id, 80);
+    if (!id) throw new Error("Select an employee to delete.");
+    const [overtimeResult, ptoResult] = await Promise.all([
+      supabase.from("overtime_entries").select("id").eq("employee_id", id).limit(1),
+      supabase.from("pto_entries").select("id").eq("employee_id", id).limit(1),
+    ]);
+    check(overtimeResult.error, "check employee overtime history");
+    check(ptoResult.error, "check employee PTO history");
+    if ((overtimeResult.data?.length ?? 0) > 0 || (ptoResult.data?.length ?? 0) > 0) throw new Error("This employee has overtime or PTO history. Mark them inactive instead so those records remain intact.");
+    const result = await supabase.from("employees").delete().eq("id", id);
+    check(result.error, "delete the employee");
   } else if (action === "add_overtime") {
     requireWrite(session.role);
     const employeeId = textValue(payload.employeeId, 80);
