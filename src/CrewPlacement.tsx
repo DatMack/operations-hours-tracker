@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type DragEvent, type FormEvent } from "react";
 import type { CrewPosition, CrewSystem, Employee, TrackerBundle } from "./lib/tracker-api";
-import type { ShiftColor } from "./lib/schedule";
+import { scheduleLabel } from "./lib/schedule";
 
 type Mutate = (payload: Record<string, unknown>, success: string) => Promise<boolean>;
 
@@ -28,7 +28,7 @@ function CrewEmployeeCard({ employee, selected, editable, onSelect, onClear }: {
     onClick={editable ? onSelect : undefined}
   >
     <span className="avatar">{initials(employee.name)}</span>
-    <span><strong>{employee.name}</strong><small>{employee.department} · {employee.shiftColor} {employee.shiftPeriod}</small></span>
+    <span><strong>{employee.name}</strong><small>{employee.department} · {employee.scheduleName}</small></span>
     {onClear && <button type="button" className="crew-clear" onClick={(event) => { event.stopPropagation(); onClear(); }}>Unassign</button>}
   </article>;
 }
@@ -45,7 +45,7 @@ function TemplateManager({ data, departmentId, busy, onMutate }: { data: Tracker
   }
 
   return <section className="panel crew-template-panel">
-    <div className="panel-head"><div><p className="eyebrow">Administrator template</p><h2>{department?.name ?? "Department"} systems & positions</h2></div><span className="subtle-count">Changes apply to all four crews</span></div>
+    <div className="panel-head"><div><p className="eyebrow">Administrator template</p><h2>{department?.name ?? "Department"} systems & positions</h2></div><span className="subtle-count">Shared by the department’s schedules</span></div>
     <div className="crew-template-body">
       <form className="crew-add-system" onSubmit={addSystem}>
         <label><span>New system</span><input name="name" maxLength={100} placeholder="Example: Line One" required /></label>
@@ -105,42 +105,48 @@ export default function CrewPlacement({ data, busy, onMutate }: { data: TrackerB
   const activeDepartments = data.departments.filter((department) => department.active);
   const firstDepartment = data.session.departmentId ?? activeDepartments[0]?.id ?? data.departments[0]?.id ?? "";
   const [departmentId, setDepartmentId] = useState(firstDepartment);
-  const [shiftColor, setShiftColor] = useState<ShiftColor>(data.session.shiftColor ?? "Blue");
-  const [shiftPeriod, setShiftPeriod] = useState<"Day" | "Night">(data.session.shiftPeriod ?? "Day");
+  const [scheduleId, setScheduleId] = useState(data.session.scheduleId ?? data.workSchedules.find((schedule) => schedule.active && schedule.departmentId === firstDepartment)?.id ?? "");
   const [selectedEmployeeId, setSelectedEmployeeId] = useState("");
   const [showTemplates, setShowTemplates] = useState(false);
+  const activeSchedules = data.workSchedules.filter((schedule) => schedule.active && schedule.departmentId === departmentId);
 
   useEffect(() => {
     if (isSupervisor) {
       setDepartmentId(data.session.departmentId ?? "");
-      setShiftColor(data.session.shiftColor ?? "Blue");
-      setShiftPeriod(data.session.shiftPeriod ?? "Day");
+      setScheduleId(data.session.scheduleId ?? "");
     } else if (!data.departments.some((department) => department.id === departmentId)) {
-      setDepartmentId(activeDepartments[0]?.id ?? data.departments[0]?.id ?? "");
+      const nextDepartmentId = activeDepartments[0]?.id ?? data.departments[0]?.id ?? "";
+      setDepartmentId(nextDepartmentId);
+      setScheduleId(data.workSchedules.find((schedule) => schedule.active && schedule.departmentId === nextDepartmentId)?.id ?? "");
+    } else if (!activeSchedules.some((schedule) => schedule.id === scheduleId)) {
+      setScheduleId(activeSchedules[0]?.id ?? "");
     }
-  }, [activeDepartments, data.departments, data.session.departmentId, data.session.shiftColor, data.session.shiftPeriod, departmentId, isSupervisor]);
+  }, [activeDepartments, activeSchedules, data.departments, data.session.departmentId, data.session.scheduleId, data.workSchedules, departmentId, isSupervisor, scheduleId]);
 
   const department = data.departments.find((item) => item.id === departmentId);
-  const crewEmployees = useMemo(() => [...data.employees.filter((employee) => employee.active && employee.departmentId === departmentId && employee.shiftColor === shiftColor && employee.shiftPeriod === shiftPeriod)].sort((a, b) => a.name.localeCompare(b.name)), [data.employees, departmentId, shiftColor, shiftPeriod]);
+  const schedule = data.workSchedules.find((item) => item.id === scheduleId);
+  const crewEmployees = useMemo(() => [...data.employees.filter((employee) => employee.active && employee.departmentId === departmentId && employee.scheduleId === scheduleId)].sort((a, b) => a.name.localeCompare(b.name)), [data.employees, departmentId, scheduleId]);
   const employeeById = useMemo(() => new Map(data.employees.map((employee) => [employee.id, employee])), [data.employees]);
   const systems = ordered(data.crewSystems.filter((system) => system.active && system.departmentId === departmentId));
   const activeSystemIds = new Set(systems.map((system) => system.id));
   const positions = ordered(data.crewPositions.filter((position) => position.active && activeSystemIds.has(position.systemId)));
   const crewEmployeeIds = new Set(crewEmployees.map((employee) => employee.id));
-  const placements = data.crewPlacements.filter((placement) => placement.shiftColor === shiftColor && placement.shiftPeriod === shiftPeriod && crewEmployeeIds.has(placement.employeeId));
+  const placements = data.crewPlacements.filter((placement) => placement.scheduleId === scheduleId && crewEmployeeIds.has(placement.employeeId));
   const placementByPosition = new Map(placements.map((placement) => [placement.positionId, placement]));
   const placedEmployeeIds = new Set(placements.map((placement) => placement.employeeId));
   const unassigned = crewEmployees.filter((employee) => !placedEmployeeIds.has(employee.id));
   const requiredPositions = positions.filter((position) => position.required);
   const filledRequired = requiredPositions.filter((position) => placementByPosition.has(position.id)).length;
-  const canEdit = data.session.role === "admin" || (isSupervisor && data.session.departmentId === departmentId && data.session.shiftColor === shiftColor && data.session.shiftPeriod === shiftPeriod);
+  const canEdit = data.session.role === "admin" || (isSupervisor && data.session.departmentId === departmentId && data.session.scheduleId === scheduleId);
   const crewHistory = data.crewPlacementHistory.filter((entry) => crewEmployeeIds.has(entry.employeeId)).slice(0, 20);
   const positionById = new Map(data.crewPositions.map((position) => [position.id, position]));
 
   function changeDepartment(offset: number) {
     const departments = activeDepartments.length ? activeDepartments : data.departments;
     const current = Math.max(0, departments.findIndex((item) => item.id === departmentId));
-    setDepartmentId(departments[(current + offset + departments.length) % departments.length]?.id ?? "");
+    const nextDepartmentId = departments[(current + offset + departments.length) % departments.length]?.id ?? "";
+    setDepartmentId(nextDepartmentId);
+    setScheduleId(data.workSchedules.find((item) => item.active && item.departmentId === nextDepartmentId)?.id ?? "");
     setSelectedEmployeeId("");
   }
 
@@ -169,15 +175,14 @@ export default function CrewPlacement({ data, busy, onMutate }: { data: TrackerB
   return <>
     <div className="page-heading crew-page-heading"><div><p className="eyebrow">Live operations roster</p><h1>Crew Placement</h1><span>{isSupervisor ? "Place your assigned crew and keep the board current until something changes." : "Flip through every crew to see current coverage, gaps, and recent moves."}</span></div>{isAdmin && <button className="secondary-button" onClick={() => setShowTemplates((current) => !current)}>{showTemplates ? "Close template setup" : "Manage templates"}</button>}</div>
 
-    {!departmentId || (isSupervisor && (!data.session.departmentId || !data.session.shiftColor || !data.session.shiftPeriod)) ? <section className="panel"><EmptyCrew title="Crew assignment is incomplete" body="An administrator must assign this supervisor a department, shift color, and Day or Night crew." /></section> : <>
+    {!departmentId || !scheduleId || (isSupervisor && (!data.session.departmentId || !data.session.scheduleId)) ? <section className="panel"><EmptyCrew title="Crew assignment is incomplete" body="An administrator must assign this supervisor a department and work-group schedule." /></section> : <>
       <section className="crew-selector panel">
-        <div><p className="eyebrow">Viewing crew</p><h2>{department?.name ?? "Department"} · {shiftColor} {shiftPeriod}</h2></div>
+        <div><p className="eyebrow">Viewing crew</p><h2>{department?.name ?? "Department"} · {schedule ? scheduleLabel(schedule) : "Schedule"}</h2></div>
         {isSupervisor ? <span className="crew-scope-note">Your assigned crew</span> : <div className="crew-selector-controls">
           <button type="button" className="icon-button" onClick={() => changeDepartment(-1)} aria-label="Previous department">‹</button>
-          <label><span>Department</span><select value={departmentId} onChange={(event) => { setDepartmentId(event.target.value); setSelectedEmployeeId(""); }}>{(activeDepartments.length ? activeDepartments : data.departments).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+          <label><span>Department</span><select value={departmentId} onChange={(event) => { const nextDepartmentId = event.target.value; setDepartmentId(nextDepartmentId); setScheduleId(data.workSchedules.find((item) => item.active && item.departmentId === nextDepartmentId)?.id ?? ""); setSelectedEmployeeId(""); }}>{(activeDepartments.length ? activeDepartments : data.departments).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           <button type="button" className="icon-button" onClick={() => changeDepartment(1)} aria-label="Next department">›</button>
-          <div className="crew-toggle" aria-label="Shift color">{(["Blue", "Yellow"] as ShiftColor[]).map((color) => <button type="button" className={shiftColor === color ? "active" : ""} key={color} onClick={() => { setShiftColor(color); setSelectedEmployeeId(""); }}>{color}</button>)}</div>
-          <div className="crew-toggle" aria-label="Shift period">{(["Day", "Night"] as const).map((period) => <button type="button" className={shiftPeriod === period ? "active" : ""} key={period} onClick={() => { setShiftPeriod(period); setSelectedEmployeeId(""); }}>{period}</button>)}</div>
+          <label><span>Work group / schedule</span><select value={scheduleId} onChange={(event) => { setScheduleId(event.target.value); setSelectedEmployeeId(""); }}>{activeSchedules.map((item) => <option key={item.id} value={item.id}>{scheduleLabel(item)}</option>)}</select></label>
         </div>}
       </section>
 

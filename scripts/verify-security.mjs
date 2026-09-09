@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
-const [client, html, baseMigration, migration, privateHelpersMigration, companyMigration, assignmentMigration, colorMigration, profileManagementMigration, dashboardMigration, crewPlacementMigration, deployWorkflow] = await Promise.all([
+const [client, html, baseMigration, migration, privateHelpersMigration, companyMigration, assignmentMigration, colorMigration, profileManagementMigration, dashboardMigration, crewPlacementMigration, facilityScheduleMigration, deployWorkflow] = await Promise.all([
   read("src/lib/supabase.ts"),
   read("index.html"),
   read("supabase/migrations/20260814000000_operations_hours_tracker.sql"),
@@ -14,6 +14,7 @@ const [client, html, baseMigration, migration, privateHelpersMigration, companyM
   read("supabase/migrations/20260814060000_profile_admin_management.sql"),
   read("supabase/migrations/20260814070000_personal_dashboards.sql"),
   read("supabase/migrations/20260814080000_crew_placement.sql"),
+  read("supabase/migrations/20260909000000_facility_schedules.sql"),
   read(".github/workflows/deploy-pages.yml"),
 ]);
 
@@ -70,6 +71,17 @@ for (const table of ["crew_systems", "crew_positions", "crew_placements", "crew_
 assert.match(crewPlacementMigration, /p\.department_id = e\.department_id[\s\S]*p\.shift_color = e\.shift_color[\s\S]*p\.shift_period = e\.shift_period/i, "Crew placement writes must enforce the supervisor's exact crew assignment");
 assert.match(crewPlacementMigration, /create trigger crew_placement_validation_trigger/i, "Crew placement integrity must be enforced in PostgreSQL");
 assert.match(crewPlacementMigration, /create trigger crew_placement_history_trigger/i, "Crew movement history must be automatic");
+for (const table of ["work_schedules", "work_schedule_rules", "work_schedule_overrides"]) {
+  assert.match(facilityScheduleMigration, new RegExp(`alter table public\\.${table} force row level security`, "i"), `${table} must force RLS`);
+  assert.match(facilityScheduleMigration, new RegExp(`revoke all on table public\\.${table} from anon`, "i"), `${table} must reject anonymous access`);
+}
+assert.match(facilityScheduleMigration, /save_work_schedule\([\s\S]*private\.tracker_is_admin\(\)/i, "Schedule mutations must require administrator access in PostgreSQL");
+assert.match(facilityScheduleMigration, /create trigger work_schedule_guard/i, "Schedule assignment safety must be enforced by a trigger");
+assert.match(facilityScheduleMigration, /Past schedule rules are history and cannot be rewritten/i, "Effective schedule history must be immutable");
+assert.match(facilityScheduleMigration, /create trigger employees_schedule_guard/i, "Employee department/schedule assignments must be validated in PostgreSQL");
+assert.match(facilityScheduleMigration, /create trigger pto_schedule_guard/i, "PTO scheduled-day validation must run in PostgreSQL");
+assert.match(facilityScheduleMigration, /create or replace function public\.add_scheduled_pto_range/i, "Smart PTO ranges must be created atomically in PostgreSQL");
+assert.match(facilityScheduleMigration, /p\.department_id = e\.department_id and p\.schedule_id = e\.schedule_id/i, "Crew placement writes must follow the supervisor's exact schedule assignment");
 assert.match(deployWorkflow, /contents: read/, "The deployment workflow must use read-only repository access");
 assert.match(deployWorkflow, /pages: write/, "The deployment workflow may write only to Pages");
 
