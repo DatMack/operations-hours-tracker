@@ -37,12 +37,20 @@ test("the shift calendar keeps daily activity compact and moves the roster into 
 
   assert.match(app, /onClick=\{\(\) => onSelect\(dateValue\)\}/, "Calendar days should open for viewers as well as admins");
   assert.doesNotMatch(app, /disabled=\{!isAdmin\}/, "Viewer calendar dates must not be disabled");
+  const calendarView = app.slice(app.indexOf("function CalendarView"), app.indexOf("function CalendarDaySnapshot"));
+  assert.match(calendarView, /calendar-pto-count/, "Calendar squares should show PTO headcount");
+  assert.doesNotMatch(calendarView, /total scheduled|overtimeCounts|otCount/, "Calendar squares should not show scheduled staffing or overtime counts");
+  assert.match(calendarView, /<UpcomingPtoMonth monthValue=\{monthValue\} data=\{data\}/, "The calendar should include a monthly upcoming PTO quick glance");
+  assert.match(calendarView, /function UpcomingPtoMonth[\s\S]*<details className="calendar-upcoming-pto">/, "Upcoming PTO should remain collapsed until opened");
+  assert.match(calendarView, /entry\.ptoDate >= upcomingStart && entry\.ptoDate <= end/, "The quick glance should include only today-forward PTO in the viewed month");
+  assert.match(styles, /\.calendar-upcoming-pto/, "Upcoming PTO needs a styled collapsible surface");
   for (const label of ["See who worked", "Overtime worked", "PTO recorded", "Who worked"]) assert.match(app, new RegExp(label));
   assert.doesNotMatch(app, /<span>Scheduled crew<\/span>/, "The daily activity popup must not be cluttered with active employee totals");
   assert.match(app, /function CalendarWorkedSnapshot[\s\S]*worked-system-grid/, "The separate workforce popup must group people by system");
   assert.match(app, /aria-current=\{isToday \? "date" : undefined\}/, "Today must be identified accessibly");
   assert.match(styles, /\.calendar-day\.today/, "Today needs a clear visual treatment");
-  assert.match(app, /Correct scheduled shift/, "Admins must retain schedule correction access inside the snapshot");
+  assert.match(app, /Correct Blue\/Yellow shift/, "Admins must retain overall shift correction access inside the snapshot");
+  assert.match(app, /Adjust department schedules/, "Admins must also retain department-specific date adjustments");
   assert.match(api, /allCrewPlacementHistoryRows/, "Historical day views must load complete placement history instead of only recent moves");
   assert.match(styles, /\.theme-dark \.day-snapshot-banner\.blue/, "The day snapshot must have an explicit dark-mode treatment");
 });

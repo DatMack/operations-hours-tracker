@@ -8,11 +8,12 @@ import {
   type Employee,
   type Profile,
   type TrackerBundle,
+  type WorkSchedule,
 } from "./tracker-api";
-import { baseShiftForDate, toDateInput, type ShiftColor } from "./schedule";
+import { employeeScheduledHours, scheduleLabel, scheduledDatesInRange, toDateInput, type ShiftColor } from "./schedule";
 
-const DEMO_STORAGE_KEY = "operations-hours-local-demo-v1";
-const DEMO_VERSION = 1;
+const DEMO_STORAGE_KEY = "operations-hours-local-demo-v2";
+const DEMO_VERSION = 2;
 const DEMO_EMAIL = "demo.admin@example.com";
 
 type StoredDemo = { version: number; bundle: TrackerBundle };
@@ -44,6 +45,12 @@ function hours(value: unknown) {
   if (!Number.isFinite(result) || result <= 0 || result > 24 || Math.abs(result * 4 - Math.round(result * 4)) > 0.0001) {
     throw new Error("Hours must be between 0 and 24 in quarter-hour increments.");
   }
+  return Math.round(result * 4) / 4;
+}
+
+function hoursOrZero(value: unknown) {
+  const result = Number(value);
+  if (!Number.isFinite(result) || result < 0 || result > 24 || Math.abs(result * 4 - Math.round(result * 4)) > 0.0001) throw new Error("Scheduled hours must be between 0 and 24 in quarter-hour increments.");
   return Math.round(result * 4) / 4;
 }
 
@@ -84,6 +91,23 @@ function employeeFor(bundle: TrackerBundle, employeeId: unknown) {
   return match;
 }
 
+function scheduleFor(bundle: TrackerBundle, scheduleId: unknown, departmentId?: string) {
+  const match = bundle.workSchedules.find((item) => item.id === text(scheduleId, 100));
+  if (!match || (departmentId && match.departmentId !== departmentId)) throw new Error("Select a schedule configured for this department.");
+  return match;
+}
+
+function cycleHours(value: unknown) {
+  if (!Array.isArray(value) || ![7, 14].includes(value.length)) throw new Error("Choose a 7-day weekday schedule or a 14-day rotating schedule.");
+  const result = value.map((item) => {
+    const result = Number(item);
+    if (!Number.isFinite(result) || result < 0 || result > 24 || Math.abs(result * 4 - Math.round(result * 4)) > 0.0001) throw new Error("Schedule hours must be 0–24 in quarter-hour increments.");
+    return Math.round(result * 4) / 4;
+  });
+  if (!result.some((item) => item > 0)) throw new Error("A work schedule must contain at least one working day.");
+  return result;
+}
+
 function addAudit(bundle: TrackerBundle, action: string, entityType: string, details: string) {
   bundle.auditLog.unshift({
     id: id("audit"),
@@ -102,19 +126,55 @@ function saveDemoBundle(bundle: TrackerBundle) {
   return cloneBundle(next);
 }
 
-function fakeEmployees(departments: Department[]): Employee[] {
+const BLUE_223 = [12, 12, 0, 0, 12, 12, 12, 0, 0, 12, 12, 0, 0, 0];
+const YELLOW_223 = [0, 0, 12, 12, 0, 0, 0, 12, 12, 0, 0, 12, 12, 12];
+const WEEKDAY_8 = [8, 8, 8, 8, 8, 0, 0];
+
+function fakeWorkSchedules(departments: Department[], now: string): WorkSchedule[] {
+  const schedules: WorkSchedule[] = departments.flatMap((department) => {
+    const workGroup = department.name === "Production" ? "Blends" : department.name;
+    return (["Blue", "Yellow"] as ShiftColor[]).flatMap((shiftColor) => (["Day", "Night"] as const).map((shiftPeriod) => {
+      const scheduleId = `${department.id}-${shiftColor.toLowerCase()}-${shiftPeriod.toLowerCase()}`;
+      return {
+        id: scheduleId,
+        departmentId: department.id,
+        workGroup,
+        name: `${shiftColor} ${shiftPeriod}`,
+        active: true,
+        legacyShiftColor: shiftColor,
+        legacyShiftPeriod: shiftPeriod,
+        rules: [{ id: `${scheduleId}-rule`, scheduleId, effectiveFrom: "1900-01-01", anchorDate: "2026-08-10", cycleHours: shiftColor === "Blue" ? [...BLUE_223] : [...YELLOW_223], createdAt: now }],
+        createdAt: now,
+        updatedAt: now,
+      } satisfies WorkSchedule;
+    }));
+  });
+  const production = departments.find((department) => department.name === "Production");
+  if (production) {
+    for (const [index, name] of ["1st Shift", "2nd Shift", "3rd Shift"].entries()) {
+      const scheduleId = `${production.id}-repacks-${index + 1}`;
+      schedules.push({ id: scheduleId, departmentId: production.id, workGroup: "Repacks", name, active: true, rules: [{ id: `${scheduleId}-rule`, scheduleId, effectiveFrom: "1900-01-01", anchorDate: "2026-08-10", cycleHours: [...WEEKDAY_8], createdAt: now }], createdAt: now, updatedAt: now });
+    }
+  }
+  return schedules;
+}
+
+function fakeEmployees(departments: Department[], schedules: WorkSchedule[]): Employee[] {
   const departmentByName = new Map(departments.map((department) => [department.name, department]));
-  const rows: Array<[string, string, ShiftColor, "Day" | "Night"]> = [
-    ["Avery Stone", "Extrusion", "Blue", "Day"], ["Blake Turner", "Extrusion", "Blue", "Day"],
-    ["Cameron Wells", "Extrusion", "Blue", "Day"], ["Devon Reed", "Extrusion", "Blue", "Day"],
-    ["Emery Collins", "Extrusion", "Blue", "Day"], ["Finley Brooks", "Extrusion", "Blue", "Night"],
-    ["Gray Morgan", "Extrusion", "Blue", "Night"], ["Harper Lane", "Extrusion", "Blue", "Night"],
-    ["Indigo Price", "Extrusion", "Blue", "Night"], ["Jordan Hayes", "Extrusion", "Blue", "Night"],
-    ["Kai Bennett", "Extrusion", "Yellow", "Day"], ["Logan Parker", "Extrusion", "Yellow", "Day"],
-    ["Micah Foster", "Extrusion", "Yellow", "Day"], ["Noel Griffin", "Extrusion", "Yellow", "Day"],
-    ["Oakley Shaw", "Extrusion", "Yellow", "Day"], ["Peyton Ellis", "Extrusion", "Yellow", "Night"],
-    ["Quinn Bailey", "Extrusion", "Yellow", "Night"], ["Reese Jordan", "Extrusion", "Yellow", "Night"],
-    ["Skyler Ward", "Extrusion", "Yellow", "Night"], ["Tatum Blake", "Extrusion", "Yellow", "Night"],
+  const rows: Array<[string, string, string, string]> = [
+    ["Avery Stone", "Production", "Blends", "Blue Day"], ["Blake Turner", "Production", "Blends", "Blue Day"],
+    ["Cameron Wells", "Production", "Blends", "Blue Day"], ["Devon Reed", "Production", "Blends", "Blue Day"],
+    ["Emery Collins", "Production", "Blends", "Blue Day"], ["Finley Brooks", "Production", "Blends", "Blue Night"],
+    ["Gray Morgan", "Production", "Blends", "Blue Night"], ["Harper Lane", "Production", "Blends", "Blue Night"],
+    ["Indigo Price", "Production", "Blends", "Blue Night"], ["Jordan Hayes", "Production", "Blends", "Blue Night"],
+    ["Kai Bennett", "Production", "Blends", "Yellow Day"], ["Logan Parker", "Production", "Blends", "Yellow Day"],
+    ["Micah Foster", "Production", "Blends", "Yellow Day"], ["Noel Griffin", "Production", "Blends", "Yellow Day"],
+    ["Oakley Shaw", "Production", "Blends", "Yellow Day"], ["Peyton Ellis", "Production", "Blends", "Yellow Night"],
+    ["Quinn Bailey", "Production", "Blends", "Yellow Night"], ["Reese Jordan", "Production", "Blends", "Yellow Night"],
+    ["Skyler Ward", "Production", "Blends", "Yellow Night"], ["Tatum Blake", "Production", "Blends", "Yellow Night"],
+    ["Morgan Cole", "Production", "Repacks", "1st Shift"], ["Riley West", "Production", "Repacks", "1st Shift"],
+    ["Casey North", "Production", "Repacks", "2nd Shift"], ["Drew Hart", "Production", "Repacks", "2nd Shift"],
+    ["Lee Sutton", "Production", "Repacks", "3rd Shift"], ["Sam Hollis", "Production", "Repacks", "3rd Shift"],
     ["Alexis Monroe", "Spray Dry", "Blue", "Day"], ["Charlie Rowan", "Spray Dry", "Blue", "Night"],
     ["Dakota Quinn", "Spray Dry", "Yellow", "Day"], ["Frankie Sage", "Spray Dry", "Yellow", "Night"],
     ["Jamie Rivers", "Packaging", "Blue", "Day"], ["Kendall Hart", "Packaging", "Blue", "Night"],
@@ -122,13 +182,18 @@ function fakeEmployees(departments: Department[]): Employee[] {
     ["Robin Clarke", "Warehouse", "Blue", "Day"], ["Sasha Flynn", "Warehouse", "Blue", "Night"],
     ["Taylor Knox", "Warehouse", "Yellow", "Day"], ["Winter Lake", "Warehouse", "Yellow", "Night"],
   ];
-  return rows.map(([name, departmentName, shiftColor, shiftPeriod], index) => {
+  return rows.map(([name, departmentName, workGroupOrColor, scheduleNameOrPeriod], index) => {
     const department = departmentByName.get(departmentName)!;
+    const workGroup = workGroupOrColor === "Blue" || workGroupOrColor === "Yellow" ? departmentName : workGroupOrColor;
+    const scheduleName = workGroupOrColor === "Blue" || workGroupOrColor === "Yellow" ? `${workGroupOrColor} ${scheduleNameOrPeriod}` : scheduleNameOrPeriod;
+    const schedule = schedules.find((item) => item.departmentId === department.id && item.workGroup === workGroup && item.name === scheduleName)!;
     return {
       id: `demo-employee-${index + 1}`,
       name,
-      shiftColor,
-      shiftPeriod,
+      shiftColor: schedule.legacyShiftColor,
+      shiftPeriod: schedule.legacyShiftPeriod,
+      scheduleId: schedule.id,
+      scheduleName: scheduleLabel(schedule),
       departmentId: department.id,
       department: department.name,
       active: true,
@@ -140,12 +205,13 @@ function fakeEmployees(departments: Department[]): Employee[] {
 function createDemoBundle(): TrackerBundle {
   const now = new Date().toISOString();
   const departments: Department[] = [
-    { id: "demo-dept-extrusion", name: "Extrusion", defaultCostCode: "EXT-100", active: true, createdAt: now, updatedAt: now },
+    { id: "demo-dept-production", name: "Production", defaultCostCode: "PRD-100", active: true, createdAt: now, updatedAt: now },
     { id: "demo-dept-spray", name: "Spray Dry", defaultCostCode: "SPD-200", active: true, createdAt: now, updatedAt: now },
     { id: "demo-dept-packaging", name: "Packaging", defaultCostCode: "PKG-300", active: true, createdAt: now, updatedAt: now },
     { id: "demo-dept-warehouse", name: "Warehouse", defaultCostCode: "WHS-400", active: true, createdAt: now, updatedAt: now },
   ];
-  const employees = fakeEmployees(departments);
+  const workSchedules = fakeWorkSchedules(departments, now);
+  const employees = fakeEmployees(departments, workSchedules);
   const employeeByName = new Map(employees.map((employee) => [employee.name, employee]));
   const crewSystems = [
     { id: "demo-system-line-one", departmentId: departments[0].id, name: "Line One", sortOrder: 0, active: true, createdAt: now, updatedAt: now },
@@ -183,14 +249,13 @@ function createDemoBundle(): TrackerBundle {
   ];
   const crewPlacements: CrewPlacement[] = placements.map(([employeeName, positionId], index) => {
     const employee = employeeByName.get(employeeName)!;
-    return { employeeId: employee.id, positionId, shiftColor: employee.shiftColor, shiftPeriod: employee.shiftPeriod, updatedBy: DEMO_EMAIL, updatedAt: timestampByOffset(-index, 8) };
+    return { employeeId: employee.id, positionId, scheduleId: employee.scheduleId, shiftColor: employee.shiftColor, shiftPeriod: employee.shiftPeriod, updatedBy: DEMO_EMAIL, updatedAt: timestampByOffset(-index, 8) };
   });
 
   const entryDates = [-1, -3, -8, -12, -18, -25].map(dateByOffset);
   const overtimeEntries = entryDates.map((workDate, index) => {
-    const working = baseShiftForDate(workDate);
-    const employee = employees.find((item) => item.shiftColor !== working && item.active && item.departmentId === departments[index % departments.length].id)
-      ?? employees.find((item) => item.shiftColor !== working)!;
+    const employee = employees.find((item) => item.active && item.departmentId === departments[index % departments.length].id && employeeScheduledHours(item, workDate, workSchedules) === 0)
+      ?? employees.find((item) => employeeScheduledHours(item, workDate, workSchedules) === 0)!;
     const department = departments[index % departments.length];
     return {
       id: `demo-ot-${index + 1}`,
@@ -199,8 +264,8 @@ function createDemoBundle(): TrackerBundle {
       departmentId: department.id,
       departmentName: department.name,
       employeeName: employee.name,
-      shiftName: `${employee.shiftColor} ${employee.shiftPeriod}`,
-      hours: index === 2 ? 4 : 12,
+      shiftName: employee.scheduleName,
+      hours: employee.scheduleName.includes("Repacks") ? 8 : index === 2 ? 4 : 12,
       costCode: department.defaultCostCode,
       reason: ["Production Needs", "Call-Off Coverage", "Training", "Staffing Shortage"][index % 4],
       notes: ["Covered a planned opening", "Helped cover a call-off", "Cross-training on the line", "Additional staffing for production"][index % 4],
@@ -208,19 +273,24 @@ function createDemoBundle(): TrackerBundle {
       createdAt: timestampByOffset(-index, 14),
     };
   });
-  const ptoEntries = [-2, -6, -10, 2].map((offset, index) => ({
-    id: `demo-pto-${index + 1}`,
-    ptoDate: dateByOffset(offset),
-    employeeId: employees[20 + index].id,
-    hours: index === 3 ? 4 : 12,
-    ptoType: ["Vacation", "Sick", "Personal", "Vacation"][index],
-    notes: index === 1 ? "Approved sick time" : "Approved request",
-    enteredBy: DEMO_EMAIL,
-    createdAt: timestampByOffset(offset - 3, 10),
-  }));
+  const ptoEntries = [-2, -6, -10, 2].map((offset, index) => {
+    const employee = employees[20 + index];
+    const planned = scheduledDatesInRange(employee, dateByOffset(offset), dateByOffset(offset + 20), workSchedules)[0];
+    return {
+      id: `demo-pto-${index + 1}`,
+      ptoDate: planned.date,
+      employeeId: employee.id,
+      hours: index === 3 ? Math.min(4, planned.hours) : planned.hours,
+      ptoType: ["Vacation", "Sick", "Personal", "Vacation"][index],
+      notes: index === 1 ? "Approved sick time" : "Approved request",
+      scheduleName: employee.scheduleName,
+      enteredBy: DEMO_EMAIL,
+      createdAt: timestampByOffset(offset - 3, 10),
+    };
+  });
   const profiles: Profile[] = [
     { email: DEMO_EMAIL, fullName: "Demo Administrator", role: "admin", active: true, userId: "demo-local-user", createdAt: now },
-    { email: "supervisor@example.com", fullName: "Demo Supervisor", role: "supervisor", active: true, departmentId: departments[0].id, shiftColor: "Blue", shiftPeriod: "Day", createdAt: now },
+    { email: "supervisor@example.com", fullName: "Demo Supervisor", role: "supervisor", active: true, departmentId: departments[0].id, scheduleId: workSchedules.find((schedule) => schedule.departmentId === departments[0].id && schedule.workGroup === "Blends" && schedule.name === "Blue Day")?.id, shiftColor: "Blue", shiftPeriod: "Day", createdAt: now },
     { email: "manager@example.com", fullName: "Demo Viewer", role: "viewer", active: true, createdAt: now },
   ];
 
@@ -232,6 +302,9 @@ function createDemoBundle(): TrackerBundle {
     overtimeEntries,
     ptoEntries,
     scheduleOverrides: [],
+    workSchedules,
+    workScheduleOverrides: [],
+    scheduleStorageReady: true,
     dashboardWidgets: [
       ...DEFAULT_DASHBOARD_WIDGETS.map((widget) => ({ ...widget })),
       { id: "placement_coverage", size: "compact" },
@@ -267,6 +340,8 @@ function isStoredDemo(value: unknown): value is StoredDemo {
     && Array.isArray(bundle.employees)
     && Array.isArray(bundle.overtimeEntries)
     && Array.isArray(bundle.ptoEntries)
+    && Array.isArray(bundle.workSchedules)
+    && Array.isArray(bundle.workScheduleOverrides)
     && Array.isArray(bundle.crewPlacements);
 }
 
@@ -351,10 +426,10 @@ export async function mutateDemoTracker(payload: Record<string, unknown>): Promi
     const system = position && bundle.crewSystems.find((item) => item.id === position.systemId && item.active);
     if (!position || !system || system.departmentId !== employee.departmentId) throw new Error("Choose a position in the employee's department.");
     const previous = bundle.crewPlacements.find((item) => item.employeeId === employee.id);
-    const occupied = bundle.crewPlacements.find((item) => item.positionId === position.id && item.shiftColor === employee.shiftColor && item.shiftPeriod === employee.shiftPeriod);
+    const occupied = bundle.crewPlacements.find((item) => item.positionId === position.id && item.scheduleId === employee.scheduleId);
     bundle.crewPlacements = bundle.crewPlacements.filter((item) => item.employeeId !== employee.id && item.employeeId !== occupied?.employeeId);
     if (occupied && previous) bundle.crewPlacements.push({ ...occupied, positionId: previous.positionId, updatedBy: DEMO_EMAIL, updatedAt: now });
-    bundle.crewPlacements.push({ employeeId: employee.id, positionId: position.id, shiftColor: employee.shiftColor, shiftPeriod: employee.shiftPeriod, updatedBy: DEMO_EMAIL, updatedAt: now });
+    bundle.crewPlacements.push({ employeeId: employee.id, positionId: position.id, scheduleId: employee.scheduleId, shiftColor: employee.shiftColor, shiftPeriod: employee.shiftPeriod, updatedBy: DEMO_EMAIL, updatedAt: now });
     bundle.crewPlacementHistory.unshift({ id: id("demo-history"), employeeId: employee.id, previousPositionId: previous?.positionId, nextPositionId: position.id, changedBy: DEMO_EMAIL, changedAt: now });
     if (occupied) bundle.crewPlacementHistory.unshift({ id: id("demo-history"), employeeId: occupied.employeeId, previousPositionId: occupied.positionId, nextPositionId: previous?.positionId, changedBy: DEMO_EMAIL, changedAt: now });
     addAudit(bundle, "Update crew placement", "crew_placement", `${employee.name} moved to ${system.name} · ${position.name}`);
@@ -364,6 +439,50 @@ export async function mutateDemoTracker(payload: Record<string, unknown>): Promi
     bundle.crewPlacements = bundle.crewPlacements.filter((item) => item.employeeId !== employee.id);
     if (previous) bundle.crewPlacementHistory.unshift({ id: id("demo-history"), employeeId: employee.id, previousPositionId: previous.positionId, changedBy: DEMO_EMAIL, changedAt: now });
     addAudit(bundle, "Clear crew placement", "crew_placement", `${employee.name} moved to Unassigned`);
+  } else if (action === "add_work_schedule" || action === "update_work_schedule") {
+    const department = departmentFor(bundle, payload.departmentId);
+    const workGroup = text(payload.workGroup, 100);
+    const name = text(payload.name, 100);
+    const effectiveFrom = payload.effectiveFrom;
+    const anchorDate = payload.anchorDate;
+    const pattern = cycleHours(payload.cycleHours);
+    const legacyShiftColor = payload.legacyShiftColor === "Blue" || payload.legacyShiftColor === "Yellow" ? payload.legacyShiftColor : undefined;
+    const legacyShiftPeriod = legacyShiftColor && (payload.legacyShiftPeriod === "Day" || payload.legacyShiftPeriod === "Night") ? payload.legacyShiftPeriod : undefined;
+    if (!department.active || !workGroup || !name || !dateValue(effectiveFrom) || !dateValue(anchorDate)) throw new Error("Department, work group, shift name, effective date, anchor date, and schedule hours are required.");
+    if (legacyShiftColor && !legacyShiftPeriod) throw new Error("Choose Day or Night for a Blue/Yellow schedule.");
+    if (bundle.workSchedules.some((item) => item.departmentId === department.id && item.workGroup.toLowerCase() === workGroup.toLowerCase() && item.name.toLowerCase() === name.toLowerCase() && item.id !== payload.id)) throw new Error("That department already has this work group and schedule name.");
+    if (action === "add_work_schedule") {
+      const scheduleId = id("demo-schedule");
+      bundle.workSchedules.push({ id: scheduleId, departmentId: department.id, workGroup, name, legacyShiftColor, legacyShiftPeriod, active: true, rules: [{ id: id("demo-rule"), scheduleId, effectiveFrom, anchorDate, cycleHours: pattern, createdAt: now }], createdAt: now, updatedAt: now });
+      addAudit(bundle, "Add work schedule", "work_schedule", `${department.name} · ${workGroup} · ${name}`);
+    } else {
+      const schedule = scheduleFor(bundle, payload.id, department.id);
+      if (payload.active === false && bundle.employees.some((employee) => employee.active && employee.scheduleId === schedule.id)) throw new Error("Move or deactivate active employees before deactivating this schedule.");
+      schedule.workGroup = workGroup;
+      schedule.name = name;
+      schedule.legacyShiftColor = legacyShiftColor;
+      schedule.legacyShiftPeriod = legacyShiftPeriod;
+      schedule.active = payload.active !== false;
+      schedule.updatedAt = now;
+      const existingRule = schedule.rules.find((rule) => rule.effectiveFrom === effectiveFrom);
+      if (existingRule) Object.assign(existingRule, { anchorDate, cycleHours: pattern });
+      else schedule.rules.push({ id: id("demo-rule"), scheduleId: schedule.id, effectiveFrom, anchorDate, cycleHours: pattern, createdAt: now });
+      bundle.employees.filter((employee) => employee.scheduleId === schedule.id).forEach((employee) => { employee.scheduleName = scheduleLabel(schedule); employee.shiftColor = legacyShiftColor; employee.shiftPeriod = legacyShiftPeriod; });
+      bundle.profiles.filter((profile) => profile.scheduleId === schedule.id).forEach((profile) => { profile.shiftColor = legacyShiftColor; profile.shiftPeriod = legacyShiftPeriod; });
+      bundle.crewPlacements.filter((placement) => placement.scheduleId === schedule.id).forEach((placement) => { placement.shiftColor = legacyShiftColor; placement.shiftPeriod = legacyShiftPeriod; });
+      addAudit(bundle, "Update work schedule", "work_schedule", `${department.name} · ${workGroup} · ${name}`);
+    }
+  } else if (action === "save_schedule_day") {
+    const workDate = payload.workDate;
+    const changes = Array.isArray(payload.changes) ? payload.changes.slice(0, 200) : [];
+    if (!dateValue(workDate) || !changes.length) throw new Error("Choose a date and at least one schedule adjustment.");
+    for (const changeValue of changes) {
+      const change = changeValue as Record<string, unknown>;
+      const schedule = scheduleFor(bundle, change.scheduleId);
+      bundle.workScheduleOverrides = bundle.workScheduleOverrides.filter((item) => !(item.scheduleId === schedule.id && item.workDate === workDate));
+      if (change.reset !== true) bundle.workScheduleOverrides.push({ scheduleId: schedule.id, workDate, hours: hoursOrZero(change.hours), reason: text(payload.reason, 250), updatedBy: DEMO_EMAIL, updatedAt: now });
+    }
+    addAudit(bundle, "Update schedule date", "work_schedule_override", `${workDate} · ${changes.length} schedules`);
   } else if (action === "add_department" || action === "update_department") {
     const name = text(payload.name, 100);
     const defaultCostCode = text(payload.defaultCostCode, 50).toUpperCase();
@@ -384,16 +503,19 @@ export async function mutateDemoTracker(payload: Record<string, unknown>): Promi
   } else if (action === "add_employee" || action === "update_employee") {
     const name = text(payload.name, 100);
     const department = departmentFor(bundle, payload.departmentId, payload.department);
-    if (!name || !department.active || !color(payload.shiftColor) || !period(payload.shiftPeriod)) throw new Error("Name, department, shift color, and shift period are required.");
+    const schedule = scheduleFor(bundle, payload.scheduleId, department.id);
+    if (!name || !department.active || !schedule.active) throw new Error("Name, department, and an active work schedule are required.");
     if (action === "add_employee") {
-      bundle.employees.push({ id: id("demo-employee"), name, departmentId: department.id, department: department.name, shiftColor: payload.shiftColor, shiftPeriod: payload.shiftPeriod, active: true, createdAt: now });
+      bundle.employees.push({ id: id("demo-employee"), name, departmentId: department.id, department: department.name, scheduleId: schedule.id, scheduleName: scheduleLabel(schedule), shiftColor: schedule.legacyShiftColor, shiftPeriod: schedule.legacyShiftPeriod, active: true, createdAt: now });
     } else {
       const employee = employeeFor(bundle, payload.id);
       employee.name = name;
       employee.departmentId = department.id;
       employee.department = department.name;
-      employee.shiftColor = payload.shiftColor;
-      employee.shiftPeriod = payload.shiftPeriod;
+      employee.scheduleId = schedule.id;
+      employee.scheduleName = scheduleLabel(schedule);
+      employee.shiftColor = schedule.legacyShiftColor;
+      employee.shiftPeriod = schedule.legacyShiftPeriod;
       employee.active = Boolean(payload.active);
       bundle.crewPlacements = bundle.crewPlacements.filter((item) => item.employeeId !== employee.id);
     }
@@ -412,9 +534,12 @@ export async function mutateDemoTracker(payload: Record<string, unknown>): Promi
       const source = sourceValue as Record<string, unknown>;
       const name = text(source.name, 100);
       const department = departmentFor(bundle, source.departmentId, source.department);
-      if (!name || !color(source.shiftColor) || !period(source.shiftPeriod)) throw new Error("Every imported employee needs a valid name, department, shift color, and shift period.");
+      const requestedSchedule = text(source.schedule, 205).toLowerCase();
+      const selectedSchedule = bundle.workSchedules.find((item) => item.departmentId === department.id && (item.id === text(source.scheduleId, 100) || scheduleLabel(item).toLowerCase() === requestedSchedule || item.name.toLowerCase() === requestedSchedule))
+        ?? bundle.workSchedules.find((item) => item.departmentId === department.id && item.legacyShiftColor === source.shiftColor && item.legacyShiftPeriod === source.shiftPeriod);
+      if (!name || !selectedSchedule?.active) throw new Error("Every imported employee needs a valid name, department, and configured schedule.");
       const existing = bundle.employees.find((item) => item.name.toLowerCase() === name.toLowerCase());
-      const values = { name, departmentId: department.id, department: department.name, shiftColor: source.shiftColor, shiftPeriod: source.shiftPeriod, active: source.active !== false };
+      const values = { name, departmentId: department.id, department: department.name, scheduleId: selectedSchedule.id, scheduleName: scheduleLabel(selectedSchedule), shiftColor: selectedSchedule.legacyShiftColor, shiftPeriod: selectedSchedule.legacyShiftPeriod, active: source.active !== false };
       if (existing) Object.assign(existing, values);
       else bundle.employees.push({ id: id("demo-employee"), ...values, createdAt: now });
     }
@@ -426,28 +551,47 @@ export async function mutateDemoTracker(payload: Record<string, unknown>): Promi
     const reason = text(payload.reason, 100);
     const costCode = text(payload.costCode, 50).toUpperCase();
     if (!dateValue(workDate) || !costCode || !OT_REASONS.includes(reason as typeof OT_REASONS[number])) throw new Error("Employee, date, department, cost code, and reason are required.");
-    const workingColor = bundle.scheduleOverrides.find((item) => item.workDate === workDate)?.shiftColor ?? baseShiftForDate(workDate);
-    if (employee.shiftColor === workingColor) throw new Error(`${employee.name} is already scheduled to work on ${workDate}.`);
-    bundle.overtimeEntries.unshift({ id: id("demo-ot"), workDate, employeeId: employee.id, departmentId: department.id, departmentName: department.name, employeeName: employee.name, shiftName: `${employee.shiftColor} ${employee.shiftPeriod}`, hours: hours(payload.hours), costCode, reason, notes: text(payload.notes, 500), enteredBy: DEMO_EMAIL, createdAt: now });
+    const plannedHours = employeeScheduledHours(employee, workDate, bundle.workSchedules, bundle.workScheduleOverrides, bundle.scheduleOverrides);
+    if (plannedHours > 0) throw new Error(`${employee.name} is already scheduled for ${plannedHours} hours on ${workDate}.`);
+    bundle.overtimeEntries.unshift({ id: id("demo-ot"), workDate, employeeId: employee.id, departmentId: department.id, departmentName: department.name, employeeName: employee.name, shiftName: employee.scheduleName, hours: hours(payload.hours), costCode, reason, notes: text(payload.notes, 500), enteredBy: DEMO_EMAIL, createdAt: now });
     addAudit(bundle, "Add overtime", "overtime_entry", `${employee.name} · ${workDate}`);
   } else if (action === "update_overtime") {
     const entry = bundle.overtimeEntries.find((item) => item.id === text(payload.id, 80));
+    const employee = entry && employeeFor(bundle, entry.employeeId);
     const department = departmentFor(bundle, payload.departmentId);
+    const workDate = payload.workDate;
     const reason = text(payload.reason, 100);
     const costCode = text(payload.costCode, 50).toUpperCase();
-    if (!entry || !costCode || !OT_REASONS.includes(reason as typeof OT_REASONS[number])) throw new Error("Valid overtime details are required.");
-    Object.assign(entry, { departmentId: department.id, departmentName: department.name, hours: hours(payload.hours), costCode, reason, notes: text(payload.notes, 500) });
+    if (!entry || !employee || !dateValue(workDate) || !costCode || !OT_REASONS.includes(reason as typeof OT_REASONS[number])) throw new Error("Valid overtime details, including its date, are required.");
+    const plannedHours = employeeScheduledHours(employee, workDate, bundle.workSchedules, bundle.workScheduleOverrides, bundle.scheduleOverrides);
+    if (plannedHours > 0) throw new Error(`${employee.name} is already scheduled for ${plannedHours} hours on ${workDate}.`);
+    Object.assign(entry, { workDate, departmentId: department.id, departmentName: department.name, hours: hours(payload.hours), costCode, reason, notes: text(payload.notes, 500) });
     addAudit(bundle, "Update overtime", "overtime_entry", entry.employeeName);
   } else if (action === "delete_overtime") {
     bundle.overtimeEntries = bundle.overtimeEntries.filter((item) => item.id !== text(payload.id, 80));
     addAudit(bundle, "Delete overtime", "overtime_entry", "Removed a local demo entry");
-  } else if (action === "add_pto") {
+  } else if (action === "add_pto" || action === "add_pto_range") {
     const employee = employeeFor(bundle, payload.employeeId);
+    const startDate = payload.startDate ?? payload.ptoDate;
+    const endDate = payload.endDate ?? payload.ptoDate;
+    const ptoType = text(payload.ptoType, 50);
+    if (!dateValue(startDate) || !dateValue(endDate) || startDate > endDate || !ptoType) throw new Error("Employee, start date, through date, and PTO type are required.");
+    const existingDates = new Set(bundle.ptoEntries.filter((entry) => entry.employeeId === employee.id).map((entry) => entry.ptoDate));
+    const plannedDates = scheduledDatesInRange(employee, startDate, endDate, bundle.workSchedules, bundle.workScheduleOverrides, bundle.scheduleOverrides).filter((item) => !existingDates.has(item.date));
+    if (!plannedDates.length) throw new Error("No PTO was added. Every date was an off day or already had a PTO entry.");
+    const fixedHours = payload.useScheduledHours === false ? hours(payload.hours) : undefined;
+    bundle.ptoEntries.unshift(...plannedDates.map((item) => ({ id: id("demo-pto"), ptoDate: item.date, employeeId: employee.id, hours: fixedHours ?? item.hours, ptoType, notes: text(payload.notes, 500), scheduleName: employee.scheduleName, enteredBy: DEMO_EMAIL, createdAt: now })));
+    addAudit(bundle, "Add PTO range", "pto_entry", `${employee.name} · ${startDate} through ${endDate} · ${plannedDates.length} scheduled days`);
+  } else if (action === "update_pto") {
+    const entry = bundle.ptoEntries.find((item) => item.id === text(payload.id, 80));
     const ptoDate = payload.ptoDate;
     const ptoType = text(payload.ptoType, 50);
-    if (!dateValue(ptoDate) || !ptoType) throw new Error("Employee, date, and PTO type are required.");
-    bundle.ptoEntries.unshift({ id: id("demo-pto"), ptoDate, employeeId: employee.id, hours: hours(payload.hours), ptoType, notes: text(payload.notes, 500), enteredBy: DEMO_EMAIL, createdAt: now });
-    addAudit(bundle, "Add PTO", "pto_entry", `${employee.name} · ${ptoDate}`);
+    if (!entry || !dateValue(ptoDate) || !ptoType) throw new Error("PTO date, hours, and type are required.");
+    const employee = employeeFor(bundle, entry.employeeId);
+    if (employeeScheduledHours(employee, ptoDate, bundle.workSchedules, bundle.workScheduleOverrides, bundle.scheduleOverrides) <= 0) throw new Error(`${employee.name} is not scheduled to work on ${ptoDate}.`);
+    if (bundle.ptoEntries.some((item) => item.id !== entry.id && item.employeeId === employee.id && item.ptoDate === ptoDate)) throw new Error("This employee already has PTO on that date.");
+    Object.assign(entry, { ptoDate, hours: hours(payload.hours), ptoType, notes: text(payload.notes, 500) });
+    addAudit(bundle, "Update PTO", "pto_entry", `${employee.name} · ${ptoDate}`);
   } else if (action === "delete_pto") {
     bundle.ptoEntries = bundle.ptoEntries.filter((item) => item.id !== text(payload.id, 80));
     addAudit(bundle, "Delete PTO", "pto_entry", "Removed a local demo entry");
@@ -463,9 +607,11 @@ export async function mutateDemoTracker(payload: Record<string, unknown>): Promi
       if (!employee || !dateValue(entryDate) || !codeOrType || (type !== "OT" && type !== "PTO")) throw new Error("Every history row needs a valid type, date, employee, hours, and code/type.");
       if (type === "OT") {
         const department = departmentFor(bundle, source.departmentId ?? employee.departmentId, source.department);
-        bundle.overtimeEntries.unshift({ id: id("demo-ot"), workDate: entryDate, employeeId: employee.id, departmentId: department.id, departmentName: department.name, employeeName: employee.name, shiftName: `${employee.shiftColor} ${employee.shiftPeriod}`, hours: hours(source.hours), costCode: codeOrType.toUpperCase(), reason: text(source.reason, 100) || "Historical import", notes: text(source.notes, 500), enteredBy: DEMO_EMAIL, createdAt: now });
+        if (employeeScheduledHours(employee, entryDate, bundle.workSchedules, bundle.workScheduleOverrides, bundle.scheduleOverrides) > 0) throw new Error(`${employee.name} was already scheduled to work on ${entryDate}.`);
+        bundle.overtimeEntries.unshift({ id: id("demo-ot"), workDate: entryDate, employeeId: employee.id, departmentId: department.id, departmentName: department.name, employeeName: employee.name, shiftName: employee.scheduleName, hours: hours(source.hours), costCode: codeOrType.toUpperCase(), reason: text(source.reason, 100) || "Historical import", notes: text(source.notes, 500), enteredBy: DEMO_EMAIL, createdAt: now });
       } else {
-        bundle.ptoEntries.unshift({ id: id("demo-pto"), ptoDate: entryDate, employeeId: employee.id, hours: hours(source.hours), ptoType: codeOrType, notes: text(source.notes, 500), enteredBy: DEMO_EMAIL, createdAt: now });
+        if (employeeScheduledHours(employee, entryDate, bundle.workSchedules, bundle.workScheduleOverrides, bundle.scheduleOverrides) <= 0) throw new Error(`${employee.name} is not scheduled to work on ${entryDate}; no PTO entry was created.`);
+        bundle.ptoEntries.unshift({ id: id("demo-pto"), ptoDate: entryDate, employeeId: employee.id, hours: hours(source.hours), ptoType: codeOrType, notes: text(source.notes, 500), scheduleName: employee.scheduleName, enteredBy: DEMO_EMAIL, createdAt: now });
       }
     }
     addAudit(bundle, "Import history", "history", `${rows.length} local demo rows processed`);
@@ -484,8 +630,9 @@ export async function mutateDemoTracker(payload: Record<string, unknown>): Promi
     const role = payload.role;
     if (!email.includes("@") || !fullName || (role !== "admin" && role !== "supervisor" && role !== "viewer")) throw new Error("Valid name, email, and role are required.");
     const assignment = role === "supervisor" ? departmentFor(bundle, payload.departmentId) : undefined;
-    if (role === "supervisor" && (!color(payload.shiftColor) || !period(payload.shiftPeriod))) throw new Error("Supervisors require a department, shift color, and Day or Night assignment.");
-    const values: Profile = { email, fullName, role, active: payload.active !== false, departmentId: assignment?.id, shiftColor: role === "supervisor" ? payload.shiftColor as ShiftColor : undefined, shiftPeriod: role === "supervisor" ? payload.shiftPeriod as "Day" | "Night" : undefined, createdAt: now };
+    const schedule = role === "supervisor" && assignment ? scheduleFor(bundle, payload.scheduleId, assignment.id) : undefined;
+    if (role === "supervisor" && (!assignment?.active || !schedule?.active)) throw new Error("Supervisors require an active department and work-schedule assignment.");
+    const values: Profile = { email, fullName, role, active: payload.active !== false, departmentId: assignment?.id, scheduleId: schedule?.id, shiftColor: schedule?.legacyShiftColor, shiftPeriod: schedule?.legacyShiftPeriod, createdAt: now };
     if (action === "add_profile") bundle.profiles.push(values);
     else {
       const index = bundle.profiles.findIndex((item) => item.email === text(payload.originalEmail, 160).toLowerCase());
