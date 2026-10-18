@@ -13,7 +13,7 @@
     "verify": "npm run typecheck && npm test && npm run security:check && npm run build"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.112.3",
+    "@supabase/supabase-js": "^2.112.4",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   },
